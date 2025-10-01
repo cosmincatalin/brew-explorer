@@ -1,12 +1,13 @@
-use crate::models::PackageInfo;
+use crate::models::{PackageInfo, PackageType, BrewInfoResponse, BrewFormula, BrewCask};
 use anyhow::Result;
-use homebrew::{info, list, Cask, Formula};
 use std::any::Any;
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::time::{Duration, Instant};
+use std::process::Command;
+use serde_json;
 
 /// Trait for package repository operations
 pub trait PackageRepository: Any {
@@ -39,6 +40,34 @@ pub struct HomebrewRepository {
     last_animation_update: Arc<Mutex<Instant>>, // Track last animation update
 }
 
+/// Helper functions for calling brew commands
+fn brew_list() -> Result<Vec<String>> {
+    let output = Command::new("brew")
+        .args(&["list"])
+        .output()?;
+    
+    if !output.status.success() {
+        return Err(anyhow::anyhow!("brew list command failed"));
+    }
+    
+    let output_str = String::from_utf8(output.stdout)?;
+    Ok(output_str.lines().map(|s| s.to_string()).collect())
+}
+
+fn brew_info(package_name: &str) -> Result<BrewInfoResponse> {
+    let output = Command::new("brew")
+        .args(&["info", "--json=v2", package_name])
+        .output()?;
+    
+    if !output.status.success() {
+        return Err(anyhow::anyhow!("brew info command failed for {}", package_name));
+    }
+    
+    let output_str = String::from_utf8(output.stdout)?;
+    let response: BrewInfoResponse = serde_json::from_str(&output_str)?;
+    Ok(response)
+}
+
 impl HomebrewRepository {
     pub fn new() -> Self {
         let mut installed_packages = Vec::new();
@@ -63,7 +92,7 @@ impl HomebrewRepository {
         });
         
         // Load installed package names immediately (synchronously)
-        match list() {
+        match brew_list() {
             Ok(package_names) => {
                 // Create placeholder PackageInfo entries for each installed package
                 // We'll fetch detailed info only when the package is selected
@@ -175,19 +204,19 @@ impl HomebrewRepository {
                 }
                 
                 // Fetch package info
-                match info(&request.package_name) {
+                match brew_info(&request.package_name) {
                     Ok(package) => {
                         let mut to_cache = Vec::new();
                         
                         // Look for matching formula
-                        for formula in package.formulae() {
-                            let pkg_info = formula_to_package_info(formula);
+                        for formula in &package.formulae {
+                            let pkg_info = brew_formula_to_package_info(formula);
                             to_cache.push((formula.name.clone(), pkg_info));
                         }
                         
                         // Look for matching cask
-                        for cask in package.casks() {
-                            let pkg_info = cask_to_package_info(cask);
+                        for cask in &package.casks {
+                            let pkg_info = brew_cask_to_package_info(cask);
                             to_cache.push((cask.token.clone(), pkg_info));
                         }
                         
@@ -365,19 +394,43 @@ impl PackageRepository for HomebrewRepository {
         None
     }
 
-    fn install_package(&self, _package_name: &str) -> Result<()> {
-        // TODO: Implement brew install command
-        Err(anyhow::anyhow!("Install functionality not yet implemented"))
+    fn install_package(&self, package_name: &str) -> Result<()> {
+        let output = Command::new("brew")
+            .args(&["install", package_name])
+            .output()?;
+        
+        if !output.status.success() {
+            let error_msg = String::from_utf8_lossy(&output.stderr);
+            return Err(anyhow::anyhow!("Failed to install {}: {}", package_name, error_msg));
+        }
+        
+        Ok(())
     }
 
-    fn uninstall_package(&self, _package_name: &str) -> Result<()> {
-        // TODO: Implement brew uninstall command
-        Err(anyhow::anyhow!("Uninstall functionality not yet implemented"))
+    fn uninstall_package(&self, package_name: &str) -> Result<()> {
+        let output = Command::new("brew")
+            .args(&["uninstall", package_name])
+            .output()?;
+        
+        if !output.status.success() {
+            let error_msg = String::from_utf8_lossy(&output.stderr);
+            return Err(anyhow::anyhow!("Failed to uninstall {}: {}", package_name, error_msg));
+        }
+        
+        Ok(())
     }
 
-    fn update_package(&self, _package_name: &str) -> Result<()> {
-        // TODO: Implement brew upgrade command
-        Err(anyhow::anyhow!("Update functionality not yet implemented"))
+    fn update_package(&self, package_name: &str) -> Result<()> {
+        let output = Command::new("brew")
+            .args(&["upgrade", package_name])
+            .output()?;
+        
+        if !output.status.success() {
+            let error_msg = String::from_utf8_lossy(&output.stderr);
+            return Err(anyhow::anyhow!("Failed to update {}: {}", package_name, error_msg));
+        }
+        
+        Ok(())
     }
     
     fn as_any(&self) -> &dyn Any {
@@ -385,43 +438,44 @@ impl PackageRepository for HomebrewRepository {
     }
 }
 
-/// Convert a homebrew Formula to our PackageInfo structure
-fn formula_to_package_info(formula: &Formula) -> PackageInfo {
-    let installed_version = if formula.is_installed() {
-        // Get the latest installed version if available
-        formula.installed.first().map(|i| i.version.clone())
+/// Convert a brew Formula JSON to our PackageInfo structure
+fn brew_formula_to_package_info(formula: &BrewFormula) -> PackageInfo {
+    let installed_version = if !formula.installed.is_empty() {
+        Some(formula.installed[0].version.clone())
     } else {
         None
     };
 
-    PackageInfo::new(
+    PackageInfo::new_with_type(
         formula.name.clone(),
         formula.desc.clone(),
         formula.homepage.clone(),
         formula.versions.stable.clone().unwrap_or_else(|| "unknown".to_string()),
         installed_version,
+        PackageType::Formula,
+        Some(formula.tap.clone()),
     )
 }
 
-/// Convert a homebrew Cask to our PackageInfo structure  
-fn cask_to_package_info(cask: &Cask) -> PackageInfo {
-    let installed_version = if cask.is_installed() {
-        cask.installed.clone()
-    } else {
-        None
-    };
+/// Convert a brew Cask JSON to our PackageInfo structure  
+fn brew_cask_to_package_info(cask: &BrewCask) -> PackageInfo {
+    let installed_version = cask.installed.clone();
+    
+    let description = cask.desc.clone().unwrap_or_else(|| {
+        if cask.name.is_empty() {
+            "No description available".to_string()
+        } else {
+            cask.name.join(", ")
+        }
+    });
 
-    PackageInfo::new(
+    PackageInfo::new_with_type(
         cask.token.clone(),
-        cask.desc.clone().unwrap_or_else(|| {
-            if cask.name.is_empty() {
-                "No description available".to_string()
-            } else {
-                cask.name.join(", ")
-            }
-        }),
+        description,
         cask.homepage.clone(),
         cask.version.clone(),
         installed_version,
+        PackageType::Cask,
+        Some(format!("{} (cask)", cask.tap)),
     )
 }

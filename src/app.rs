@@ -1,4 +1,4 @@
-use crate::models::PackageInfo;
+use crate::models::{PackageInfo, PackageType};
 use crate::repository::PackageRepository;
 use anyhow::Result;
 use ratatui::widgets::ListState;
