@@ -12,8 +12,8 @@ use crossterm::{
     terminal::{EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode},
 };
 use events::handle_key_event;
-use ratatui::{Terminal, backend::CrosstermBackend};
-use repository::MockPackageRepository;
+use ratatui::{Terminal, backend::CrosstermBackend, prelude::Backend};
+use repository::HomebrewRepository;
 use std::{
     io,
     time::{Duration, Instant},
@@ -29,7 +29,7 @@ fn main() -> Result<()> {
     let mut terminal = Terminal::new(backend)?;
 
     // Create app with repository
-    let repository = Box::new(MockPackageRepository::new());
+    let repository = Box::new(HomebrewRepository::new());
     let mut app = App::new(repository)?;
     let res = run_app(&mut terminal, &mut app);
 
@@ -49,9 +49,10 @@ fn main() -> Result<()> {
     Ok(())
 }
 
-fn run_app(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>, app: &mut App) -> Result<()> {
+fn run_app<B: Backend>(terminal: &mut Terminal<B>, app: &mut App) -> Result<()> {
     let tick_rate = Duration::from_millis(100);
     let mut last_tick = Instant::now();
+    let mut last_refresh = Instant::now();
 
     loop {
         terminal.draw(|f| render_ui(f, app))?;
@@ -87,7 +88,22 @@ fn run_app(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>, app: &mut App)
 
             let available_width = chunks[0].width.saturating_sub(4) as usize; // Account for borders
             app.update_scroll(available_width);
+            
+            // Update repository status to get background caching messages
+            app.update_repository_status();
+            
+            // Update package details from background loading
+            app.update_package_details();
+            
             last_tick = Instant::now();
+        }
+        
+        // Refresh package list every 2 seconds to pick up cached packages
+        if last_refresh.elapsed() >= Duration::from_secs(2) {
+            if let Err(_) = app.refresh_package_list() {
+                // Ignore refresh errors to avoid crashing the app
+            }
+            last_refresh = Instant::now();
         }
 
         if app.should_quit {

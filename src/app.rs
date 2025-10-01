@@ -2,6 +2,7 @@ use crate::models::PackageInfo;
 use crate::repository::PackageRepository;
 use anyhow::Result;
 use ratatui::widgets::ListState;
+use std::collections::VecDeque;
 use std::time::{Duration, Instant};
 
 /// Application state and business logic
@@ -14,6 +15,7 @@ pub struct App {
     pub search_query: String,
     pub filtered_items: Vec<PackageInfo>,
     pub is_searching: bool,
+    pub status_messages: VecDeque<(String, Instant)>,
     repository: Box<dyn PackageRepository>,
 }
 
@@ -30,6 +32,7 @@ impl App {
             should_quit: false,
             search_query: String::new(),
             is_searching: false,
+            status_messages: VecDeque::new(),
             repository,
         };
         app.list_state.select(Some(0));
@@ -40,7 +43,24 @@ impl App {
     pub fn refresh_packages(&mut self) -> Result<()> {
         self.items = self.repository.get_all_packages()?;
         self.apply_filter();
+        
+        // Check for status updates from repository if it's a HomebrewRepository
+        if let Some(status) = self.get_repository_status() {
+            self.add_status_message(status);
+        }
+        
         Ok(())
+    }
+    
+    /// Gets status from repository if available
+    fn get_repository_status(&self) -> Option<String> {
+        // This is a bit hacky, but we need to downcast to HomebrewRepository
+        // In a real application, you might want to add status methods to the trait
+        if let Some(homebrew_repo) = self.repository.as_any().downcast_ref::<crate::repository::HomebrewRepository>() {
+            homebrew_repo.get_current_status()
+        } else {
+            None
+        }
     }
 
     /// Moves to the next item in the list
@@ -135,6 +155,36 @@ impl App {
         };
 
         self.list_state.selected().and_then(|i| items.get(i))
+    }
+
+    /// Gets the currently selected package with full details (fetches if needed)
+    pub fn get_selected_package_details(&self) -> Option<PackageInfo> {
+        if let Some(package) = self.get_selected_package() {
+            // Try to get detailed info from repository
+            if let Some(detailed_package) = self.repository.get_package_details(&package.name) {
+                return Some(detailed_package);
+            }
+            // If no detailed info available, return the placeholder
+            Some(package.clone())
+        } else {
+            None
+        }
+    }
+    
+    /// Update package details from cache if available (for background loading)
+    pub fn update_package_details(&mut self) {
+        if let Some(selected_package) = self.get_selected_package() {
+            // Check if there are updated details available
+            if let Some(homebrew_repo) = self.repository.as_any().downcast_ref::<crate::repository::HomebrewRepository>() {
+                if homebrew_repo.has_updated_details(&selected_package.name) {
+                    if let Some(updated_details) = homebrew_repo.get_cached_details(&selected_package.name) {
+                        // Update the package in our installed_packages list
+                        // Note: This is a simplified approach - in a more complex app,
+                        // you might want to trigger a UI refresh here
+                    }
+                }
+            }
+        }
     }
 
     /// Gets the current list of packages to display
@@ -239,5 +289,67 @@ impl App {
     /// Sets the quit flag
     pub fn quit(&mut self) {
         self.should_quit = true;
+    }
+
+    /// Adds a status message that will be displayed in the status bar
+    pub fn add_status_message(&mut self, message: String) {
+        self.status_messages.push_back((message, Instant::now()));
+        // Keep only the last 5 messages
+        while self.status_messages.len() > 5 {
+            self.status_messages.pop_front();
+        }
+    }
+
+    /// Gets the current status message to display
+    pub fn get_current_status(&mut self) -> Option<String> {
+        // Clean up old messages (older than 10 seconds)
+        let now = Instant::now();
+        while let Some((_, timestamp)) = self.status_messages.front() {
+            if now.duration_since(*timestamp) > Duration::from_secs(10) {
+                self.status_messages.pop_front();
+            } else {
+                break;
+            }
+        }
+
+        // Return the most recent message
+        self.status_messages.back().map(|(msg, _)| msg.clone())
+    }
+
+    /// Updates repository status if available (called periodically from main loop)
+    pub fn update_repository_status(&mut self) {
+        if let Some(status) = self.get_repository_status() {
+            self.add_status_message(status);
+        }
+    }
+    
+    /// Refresh package list to pick up newly cached packages
+    pub fn refresh_package_list(&mut self) -> Result<()> {
+        let current_selection = self.list_state.selected();
+        let current_search = self.search_query.clone();
+        
+        // Get updated packages from repository
+        self.items = self.repository.get_all_packages()?;
+        
+        // Reapply search filter if we're in search mode
+        if self.is_searching {
+            self.search_query = current_search;
+            self.apply_filter();
+        }
+        
+        // Restore selection if possible
+        if let Some(selection) = current_selection {
+            let max_index = if self.is_searching {
+                self.filtered_items.len()
+            } else {
+                self.items.len()
+            };
+            
+            if max_index > 0 {
+                self.list_state.select(Some(selection.min(max_index - 1)));
+            }
+        }
+        
+        Ok(())
     }
 }

@@ -10,13 +10,21 @@ use std::time::Duration;
 
 /// Renders the main UI
 pub fn render_ui(f: &mut Frame, app: &mut App) {
-    let chunks = Layout::default()
-        .direction(Direction::Horizontal)
-        .constraints([Constraint::Percentage(40), Constraint::Percentage(60)])
+    // Create main layout with status bar at the bottom
+    let main_chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Min(0), Constraint::Length(1)])
         .split(f.area());
 
-    render_package_list(f, app, chunks[0]);
-    render_package_details(f, app, chunks[1]);
+    // Split the main area horizontally for package list and details
+    let content_chunks = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([Constraint::Percentage(40), Constraint::Percentage(60)])
+        .split(main_chunks[0]);
+
+    render_package_list(f, app, content_chunks[0]);
+    render_package_details(f, app, content_chunks[1]);
+    render_status_bar(f, app, main_chunks[1]);
 }
 
 /// Renders the package list on the left panel
@@ -90,10 +98,10 @@ fn apply_horizontal_scroll(name: &str, available_width: usize, app: &App) -> Str
 
 /// Renders the package details on the right panel
 fn render_package_details(f: &mut Frame, app: &App, area: ratatui::layout::Rect) {
-    let details = if let Some(package) = app.get_selected_package() {
-        create_package_details_text(package)
-    } else {
-        Text::from("No package selected")
+    let package_details = app.get_selected_package_details();
+    let details = match package_details.as_ref() {
+        Some(package) => create_package_details_text(package),
+        None => Text::from("No package selected"),
     };
 
     let details_paragraph = Paragraph::new(details)
@@ -202,4 +210,19 @@ fn render_help_text(f: &mut Frame, area: ratatui::layout::Rect) {
     };
 
     f.render_widget(help_paragraph, help_rect);
+}
+
+/// Renders the status bar at the bottom of the screen
+fn render_status_bar(f: &mut Frame, app: &mut App, area: ratatui::layout::Rect) {
+    let status_text = if let Some(message) = app.get_current_status() {
+        message
+    } else {
+        "Navigate: ↑/↓ or j/k | Search: / | Actions: i/u/x | Quit: q".to_string()
+    };
+
+    let status_paragraph = Paragraph::new(status_text)
+        .style(Style::default().bg(Color::Blue).fg(Color::White))
+        .wrap(Wrap { trim: true });
+
+    f.render_widget(status_paragraph, area);
 }
