@@ -11,8 +11,6 @@ use std::time::{Duration, Instant};
 /// Trait for package repository operations
 pub trait PackageRepository: Any {
     fn get_all_packages(&self) -> Result<Vec<PackageInfo>>;
-    fn get_installed_packages(&self) -> Result<Vec<PackageInfo>>;
-    fn search_packages(&self, query: &str) -> Result<Vec<PackageInfo>>;
     fn get_package_details(&self, package_name: &str) -> Option<PackageInfo>;
     fn install_package(&self, package_name: &str) -> Result<()>;
     fn uninstall_package(&self, package_name: &str) -> Result<()>;
@@ -20,11 +18,6 @@ pub trait PackageRepository: Any {
     
     /// Allows downcasting to concrete types
     fn as_any(&self) -> &dyn Any;
-}
-
-/// Mock implementation for testing and development
-pub struct MockPackageRepository {
-    packages: Vec<PackageInfo>,
 }
 
 #[derive(Debug, Clone)]
@@ -42,6 +35,8 @@ pub struct HomebrewRepository {
     request_sender: Sender<PackageRequest>,
     current_request: Arc<Mutex<Option<String>>>, // Currently processing package
     pending_requests: Arc<Mutex<HashMap<String, Instant>>>, // Track pending requests
+    loading_animation_state: Arc<Mutex<usize>>, // For animated loading dots
+    last_animation_update: Arc<Mutex<Instant>>, // Track last animation update
 }
 
 impl HomebrewRepository {
@@ -51,6 +46,8 @@ impl HomebrewRepository {
         let current_status = Arc::new(Mutex::new(None));
         let current_request = Arc::new(Mutex::new(None));
         let pending_requests = Arc::new(Mutex::new(HashMap::new()));
+        let loading_animation_state = Arc::new(Mutex::new(0));
+        let last_animation_update = Arc::new(Mutex::new(Instant::now()));
         
         // Create request channel
         let (request_sender, request_receiver) = mpsc::channel::<PackageRequest>();
@@ -73,7 +70,7 @@ impl HomebrewRepository {
                 for package_name in package_names {
                     installed_packages.push(PackageInfo::new(
                         package_name.clone(),
-                        "Loading package information...".to_string(),
+                        "Loading package information.".to_string(), // Start with single dot
                         "".to_string(),
                         "...".to_string(),
                         Some("installed".to_string()), // Mark as installed since it came from list()
@@ -110,6 +107,8 @@ impl HomebrewRepository {
             request_sender,
             current_request,
             pending_requests,
+            loading_animation_state,
+            last_animation_update,
         }
     }
     
@@ -228,7 +227,49 @@ impl HomebrewRepository {
         status_guard.clone()
     }
     
-    /// Check if a package has updated details available in cache
+    /// Get animated loading text with cycling dots
+    pub fn get_animated_loading_text(&self) -> String {
+        // Update animation state every 400ms for faster animation
+        let should_update = {
+            let last_update = self.last_animation_update.lock().unwrap();
+            last_update.elapsed() >= Duration::from_millis(400)
+        };
+        
+        if should_update {
+            {
+                let mut last_update = self.last_animation_update.lock().unwrap();
+                *last_update = Instant::now();
+            }
+            {
+                let mut state = self.loading_animation_state.lock().unwrap();
+                *state = (*state + 1) % 3; // Cycle through 0, 1, 2
+            }
+        }
+        
+        let state = {
+            let state_guard = self.loading_animation_state.lock().unwrap();
+            *state_guard
+        };
+        
+        match state {
+            0 => "Loading package information.".to_string(),
+            1 => "Loading package information..".to_string(),
+            2 => "Loading package information...".to_string(),
+            _ => "Loading package information...".to_string(),
+        }
+    }
+    
+    /// Update loading animations for packages with loading placeholders
+    pub fn update_loading_animations(&self) -> bool {
+        // This method will be called to check if animations need updating
+        // We return true if any updates occurred to signal the UI to refresh
+        let should_update = {
+            let last_update = self.last_animation_update.lock().unwrap();
+            last_update.elapsed() >= Duration::from_millis(400)
+        };
+        
+        should_update
+    }
     pub fn has_updated_details(&self, package_name: &str) -> bool {
         let cache_guard = self.cache.lock().unwrap();
         cache_guard.contains_key(package_name)
@@ -241,74 +282,45 @@ impl HomebrewRepository {
     }
     
     /// Start background loading of package details (non-blocking)
-    pub fn start_package_details_loading(&self, package_name: String) {
-        self.request_package_details(package_name, false);
-    }
-    
     /// Request package details with priority
     pub fn request_package_details(&self, package_name: String, priority: bool) {
+        // Check if this request is already being processed or is recent
+        {
+            let current = self.current_request.lock().unwrap();
+            if let Some(ref current_name) = *current {
+                if *current_name == package_name {
+                    return; // Already processing this package
+                }
+            }
+            
+            let mut pending = self.pending_requests.lock().unwrap();
+            if let Some(&timestamp) = pending.get(&package_name) {
+                // If request was made less than 1 second ago, don't duplicate
+                if timestamp.elapsed().as_secs() < 1 {
+                    return;
+                }
+            }
+            pending.insert(package_name.clone(), Instant::now());
+        }
+        
         let request = PackageRequest {
-            package_name,
+            package_name: package_name.clone(),
             priority,
             requested_at: Instant::now(),
         };
         
-        // Send request (ignore errors if receiver is dropped)
-        let _ = self.request_sender.send(request);
-    }
-    
-    /// Get package info, fetching on-demand if not cached
-    fn get_package_info(&self, package_name: &str) -> Option<PackageInfo> {
-        // First check cache
-        {
-            let cache_guard = self.cache.lock().unwrap();
-            if let Some(cached_info) = cache_guard.get(package_name) {
-                return Some(cached_info.clone());
-            }
+        // Send the request to the background processor
+        if let Err(_) = self.request_sender.send(request) {
+            // Channel is closed, ignore
         }
         
-        // Not in cache, fetch on-demand
-        match info(package_name) {
-            Ok(package) => {
-                let mut result = None;
-                let mut to_cache = Vec::new();
-                
-                // Look for matching formula
-                for formula in package.formulae() {
-                    let pkg_info = formula_to_package_info(formula);
-                    to_cache.push((formula.name.clone(), pkg_info.clone()));
-                    
-                    if formula.name == package_name {
-                        result = Some(pkg_info);
-                    }
-                }
-                
-                // Look for matching cask
-                for cask in package.casks() {
-                    let pkg_info = cask_to_package_info(cask);
-                    to_cache.push((cask.token.clone(), pkg_info.clone()));
-                    
-                    if cask.token == package_name {
-                        result = Some(pkg_info);
-                    }
-                }
-                
-                // Cache the results
-                {
-                    let mut cache_guard = self.cache.lock().unwrap();
-                    for (name, pkg_info) in to_cache {
-                        cache_guard.insert(name, pkg_info);
-                    }
-                }
-                
-                result
-            }
-            Err(_err) => {
-                // Don't print errors, just return None
-                None
-            }
+        // If this is a priority request, update current_request
+        if priority {
+            let mut current = self.current_request.lock().unwrap();
+            *current = Some(package_name);
         }
     }
+    
 }
 
 impl PackageRepository for HomebrewRepository {
@@ -317,26 +329,6 @@ impl PackageRepository for HomebrewRepository {
         Ok(self.installed_packages.clone())
     }
 
-    fn get_installed_packages(&self) -> Result<Vec<PackageInfo>> {
-        // Since we only store installed packages, this is the same as get_all_packages
-        self.get_all_packages()
-    }
-
-    fn search_packages(&self, query: &str) -> Result<Vec<PackageInfo>> {
-        let query_lower = query.to_lowercase();
-        
-        // Search in installed packages
-        let results: Vec<PackageInfo> = self.installed_packages
-            .iter()
-            .filter(|pkg| {
-                pkg.name.to_lowercase().contains(&query_lower)
-                    || pkg.description.to_lowercase().contains(&query_lower)
-            })
-            .cloned()
-            .collect();
-        
-        Ok(results)
-    }
 
     fn get_package_details(&self, package_name: &str) -> Option<PackageInfo> {
         // First check if we have it cached (detailed info)
@@ -353,11 +345,15 @@ impl PackageRepository for HomebrewRepository {
             .find(|pkg| pkg.name == package_name);
             
         if let Some(pkg) = placeholder {
-            if pkg.description == "Loading package information..." {
+            if pkg.description.starts_with("Loading package information") {
                 // Request with HIGH PRIORITY for currently selected package
                 self.request_package_details(package_name.to_string(), true);
-                // Return the placeholder immediately for instant navigation
-                return Some(pkg.clone());
+                
+                // Return an updated placeholder with animated loading text
+                let animated_loading_text = self.get_animated_loading_text();
+                let mut updated_pkg = pkg.clone();
+                updated_pkg.description = animated_loading_text;
+                return Some(updated_pkg);
             } else {
                 // Return the existing detailed info
                 return Some(pkg.clone());
@@ -371,17 +367,17 @@ impl PackageRepository for HomebrewRepository {
 
     fn install_package(&self, _package_name: &str) -> Result<()> {
         // TODO: Implement brew install command
-        todo!("Implement actual Homebrew integration")
+        Err(anyhow::anyhow!("Install functionality not yet implemented"))
     }
 
     fn uninstall_package(&self, _package_name: &str) -> Result<()> {
         // TODO: Implement brew uninstall command
-        todo!("Implement actual Homebrew integration")
+        Err(anyhow::anyhow!("Uninstall functionality not yet implemented"))
     }
 
     fn update_package(&self, _package_name: &str) -> Result<()> {
         // TODO: Implement brew upgrade command
-        todo!("Implement actual Homebrew integration")
+        Err(anyhow::anyhow!("Update functionality not yet implemented"))
     }
     
     fn as_any(&self) -> &dyn Any {

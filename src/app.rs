@@ -173,14 +173,20 @@ impl App {
     
     /// Update package details from cache if available (for background loading)
     pub fn update_package_details(&mut self) {
+        // Check for loading animation updates
+        if let Some(homebrew_repo) = self.repository.as_any().downcast_ref::<crate::repository::HomebrewRepository>() {
+            if homebrew_repo.update_loading_animations() {
+                // Animation state changed, we might want to refresh if showing loading text
+                // The UI will automatically get the updated text when it calls get_selected_package_details
+            }
+        }
+        
         if let Some(selected_package) = self.get_selected_package() {
             // Check if there are updated details available
             if let Some(homebrew_repo) = self.repository.as_any().downcast_ref::<crate::repository::HomebrewRepository>() {
                 if homebrew_repo.has_updated_details(&selected_package.name) {
-                    if let Some(updated_details) = homebrew_repo.get_cached_details(&selected_package.name) {
-                        // Update the package in our installed_packages list
-                        // Note: This is a simplified approach - in a more complex app,
-                        // you might want to trigger a UI refresh here
+                    if let Some(_updated_details) = homebrew_repo.get_cached_details(&selected_package.name) {
+                        // Details have been updated - no need to do anything as they're already cached
                     }
                 }
             }

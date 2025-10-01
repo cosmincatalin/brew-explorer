@@ -119,7 +119,7 @@ fn render_package_details(f: &mut Frame, app: &App, area: ratatui::layout::Rect)
 }
 
 /// Creates the detailed text for a package
-fn create_package_details_text(package: &crate::models::PackageInfo) -> Text {
+fn create_package_details_text(package: &crate::models::PackageInfo) -> Text<'_> {
     let installed_status = package.installation_status();
     let status_colour = if package.is_installed() {
         Color::Green
@@ -166,7 +166,7 @@ fn create_package_details_text(package: &crate::models::PackageInfo) -> Text {
 }
 
 /// Creates action hints based on package state
-fn create_action_hints(package: &crate::models::PackageInfo) -> Line {
+fn create_action_hints(package: &crate::models::PackageInfo) -> Line<'_> {
     if package.is_installed() {
         if package.has_update_available() {
             Line::from(vec![
