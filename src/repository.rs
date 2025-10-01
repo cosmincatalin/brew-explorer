@@ -192,70 +192,17 @@ impl HomebrewRepository {
             Ok(brew_response) => {
                 // Process formulae - only include packages installed directly (not as dependencies)
                 for formula in brew_response.formulae {
-                    // Check if this formulae was installed directly by looking at the installation info
                     let is_directly_installed = formula.installed.iter().any(|install_info| {
                         install_info.installed_on_request || !install_info.installed_as_dependency
                     });
-                    
-                    // Skip packages that were only installed as dependencies
                     if !is_directly_installed {
                         continue;
                     }
-                    
-                    let latest_install = formula.installed
-                        .iter()
-                        .max_by(|a, b| {
-                            // First compare by timestamp
-                            let time_cmp = a.time.cmp(&b.time);
-                            if time_cmp != std::cmp::Ordering::Equal {
-                                return time_cmp;
-                            }
-                            // If timestamps are equal, compare versions (considering _X revisions)
-                            compare_homebrew_versions(&a.version, &b.version)
-                        });
-                    
-                    let (installed_version, installed_at) = match latest_install {
-                        Some(install) => (Some(install.version.clone()), Some(install.time)),
-                        None => (None, None),
-                    };
-                    
-                    let current_version = formula.versions.stable
-                        .unwrap_or_else(|| formula.versions.head.unwrap_or_else(|| "unknown".to_string()));
-                    
-                    installed_packages.push(PackageInfo::new_with_caveats(
-                        formula.name.clone(),
-                        formula.desc,
-                        formula.homepage,
-                        current_version,
-                        installed_version,
-                        PackageType::Formulae,
-                        Some(formula.tap),
-                        formula.outdated,
-                        formula.caveats,
-                        installed_at,
-                    ));
+                    installed_packages.push(brew_formulae_to_package_info(&formula));
                 }
-                
                 // Process casks
                 for cask in brew_response.casks {
-                    let display_name = cask.name.first()
-                        .unwrap_or(&cask.token)
-                        .clone();
-                    let description = cask.desc
-                        .unwrap_or_else(|| format!("{} (Cask application)", display_name));
-                    
-                    installed_packages.push(PackageInfo::new_with_caveats(
-                        cask.token,
-                        description,
-                        cask.homepage,
-                        cask.version.clone(),
-                        cask.installed.clone(),
-                        PackageType::Cask,
-                        Some(cask.tap),
-                        cask.outdated,
-                        cask.caveats,
-                        None, // Casks don't have installation timestamp in the JSON
-                    ));
+                    installed_packages.push(brew_cask_to_package_info(&cask));
                 }
                 
                 // If no packages are found, show a helpful message
@@ -326,8 +273,8 @@ impl HomebrewRepository {
             // Sort by priority (priority requests first, then by request time)
             pending_queue.sort_by(|a, b| {
                 match (a.priority, b.priority) {
-                    (true, false) => std::cmp::Ordering::Less,
-                    (false, true) => std::cmp::Ordering::Greater,
+                    (true, false) => Ordering::Less,
+                    (false, true) => Ordering::Greater,
                     _ => a.requested_at.cmp(&b.requested_at),
                 }
             });
@@ -551,18 +498,18 @@ impl PackageRepository for HomebrewRepository {
             .find(|pkg| pkg.name == package_name);
             
         if let Some(pkg) = placeholder {
-            if pkg.description.starts_with("Loading package information") {
+            return if pkg.description.starts_with("Loading package information") {
                 // Request with HIGH PRIORITY for currently selected package
                 self.request_package_details(package_name.to_string(), true);
-                
+
                 // Return an updated placeholder with animated loading text
                 let animated_loading_text = self.get_animated_loading_text();
                 let mut updated_pkg = pkg.clone();
                 updated_pkg.description = animated_loading_text;
-                return Some(updated_pkg);
+                Some(updated_pkg)
             } else {
                 // Return the existing detailed info
-                return Some(pkg.clone());
+                Some(pkg.clone())
             }
         }
         
@@ -628,7 +575,7 @@ impl PackageRepository for HomebrewRepository {
                     .max_by(|a, b| {
                         // First compare by timestamp
                         let time_cmp = a.time.cmp(&b.time);
-                        if time_cmp != std::cmp::Ordering::Equal {
+                        if time_cmp != Ordering::Equal {
                             return time_cmp;
                         }
                         // If timestamps are equal, compare versions (considering _X revisions)
