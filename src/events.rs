@@ -68,7 +68,6 @@ fn handle_normal_mode_keys(app: &mut App, key: KeyEvent) -> Result<()> {
         KeyCode::Home => app.first(),
         KeyCode::End => app.go_to_last(),
         KeyCode::Char('/') => app.start_search(),
-        KeyCode::Char('i') => app.install_selected_package()?,
         KeyCode::Char('x') => app.uninstall_selected_package()?,
         KeyCode::Char('u') => app.update_selected_package()?,
         KeyCode::Char('r') => app.refresh_packages()?,
@@ -81,22 +80,18 @@ fn handle_normal_mode_keys(app: &mut App, key: KeyEvent) -> Result<()> {
 fn handle_search_mode_keys(app: &mut App, key: KeyEvent) -> Result<()> {
     match key.code {
         KeyCode::Esc => app.end_search(),
-        KeyCode::Enter => app.end_search(),
         KeyCode::Backspace => app.remove_search_char(),
-        KeyCode::Down
-            if key
-                .modifiers
-                .contains(crossterm::event::KeyModifiers::CONTROL) =>
-        {
-            app.next()
-        }
-        KeyCode::Up
-            if key
-                .modifiers
-                .contains(crossterm::event::KeyModifiers::CONTROL) =>
-        {
-            app.previous()
-        }
+        KeyCode::Down => app.next(),
+        KeyCode::Up => app.previous(),
+        KeyCode::Left => app.move_left(),
+        KeyCode::Right => app.move_right(),
+        KeyCode::PageDown => app.page_down(),
+        KeyCode::PageUp => app.page_up(),
+        KeyCode::Home => app.first(),
+        KeyCode::End => app.go_to_last(),
+        KeyCode::Char('u') => app.update_selected_package()?,
+        KeyCode::Char('x') => app.uninstall_selected_package()?,
+        KeyCode::Char('q') => app.quit(),
         KeyCode::Char(c) if c.is_ascii() && !c.is_control() => app.add_search_char(c),
         _ => {}
     }

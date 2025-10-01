@@ -8,7 +8,6 @@ use std::sync::mpsc::{self, Receiver, Sender};
 use std::time::{Duration, Instant};
 use std::process::Command;
 use std::cmp::Ordering;
-use serde_json;
 
 /// Compare two Homebrew version strings, considering revision suffixes (_X)
 /// Returns Ordering::Less if a < b, Ordering::Equal if a == b, Ordering::Greater if a > b
@@ -107,7 +106,6 @@ mod tests {
 pub trait PackageRepository: Any + Send + Sync {
     fn get_all_packages(&self) -> Result<Vec<PackageInfo>>;
     fn get_package_details(&self, package_name: &str) -> Option<PackageInfo>;
-    fn install_package(&self, package_name: &str) -> Result<()>;
     fn uninstall_package(&self, package_name: &str) -> Result<()>;
     fn update_package(&self, package_name: &str) -> Result<()>;
     fn refresh_package(&self, package_name: &str) -> Result<Option<PackageInfo>>;
@@ -140,7 +138,7 @@ pub struct HomebrewRepository {
 /// Helper functions for calling brew commands
 fn brew_info_all_installed() -> Result<BrewInfoResponse> {
     let output = Command::new("brew")
-        .args(&["info", "--json=v2", "--installed"])
+        .args(["info", "--json=v2", "--installed"])
         .output()?;
     
     if !output.status.success() {
@@ -154,7 +152,7 @@ fn brew_info_all_installed() -> Result<BrewInfoResponse> {
 
 fn brew_info(package_name: &str) -> Result<BrewInfoResponse> {
     let output = Command::new("brew")
-        .args(&["info", "--json=v2", package_name])
+        .args(["info", "--json=v2", package_name])
         .output()?;
     
     if !output.status.success() {
@@ -204,7 +202,7 @@ impl HomebrewRepository {
                         continue;
                     }
                     
-                    let installed_version = formula.installed
+                    let latest_install = formula.installed
                         .iter()
                         .max_by(|a, b| {
                             // First compare by timestamp
@@ -214,12 +212,17 @@ impl HomebrewRepository {
                             }
                             // If timestamps are equal, compare versions (considering _X revisions)
                             compare_homebrew_versions(&a.version, &b.version)
-                        })
-                        .map(|inst| inst.version.clone());
+                        });
+                    
+                    let (installed_version, installed_at) = match latest_install {
+                        Some(install) => (Some(install.version.clone()), Some(install.time)),
+                        None => (None, None),
+                    };
+                    
                     let current_version = formula.versions.stable
                         .unwrap_or_else(|| formula.versions.head.unwrap_or_else(|| "unknown".to_string()));
                     
-                    installed_packages.push(PackageInfo::new_with_full_info(
+                    installed_packages.push(PackageInfo::new_with_caveats(
                         formula.name.clone(),
                         formula.desc,
                         formula.homepage,
@@ -228,6 +231,8 @@ impl HomebrewRepository {
                         PackageType::Formulae,
                         Some(formula.tap),
                         formula.outdated,
+                        formula.caveats,
+                        installed_at,
                     ));
                 }
                 
@@ -239,7 +244,7 @@ impl HomebrewRepository {
                     let description = cask.desc
                         .unwrap_or_else(|| format!("{} (Cask application)", display_name));
                     
-                    installed_packages.push(PackageInfo::new_with_full_info(
+                    installed_packages.push(PackageInfo::new_with_caveats(
                         cask.token,
                         description,
                         cask.homepage,
@@ -248,6 +253,8 @@ impl HomebrewRepository {
                         PackageType::Cask,
                         Some(cask.tap),
                         cask.outdated,
+                        cask.caveats,
+                        None, // Casks don't have installation timestamp in the JSON
                     ));
                 }
                 
@@ -442,12 +449,12 @@ impl HomebrewRepository {
     pub fn update_loading_animations(&self) -> bool {
         // This method will be called to check if animations need updating
         // We return true if any updates occurred to signal the UI to refresh
-        let should_update = {
+        
+        
+        {
             let last_update = self.last_animation_update.lock().unwrap();
             last_update.elapsed() >= Duration::from_millis(400)
-        };
-        
-        should_update
+        }
     }
     pub fn has_updated_details(&self, package_name: &str) -> bool {
         let cache_guard = self.cache.lock().unwrap();
@@ -466,11 +473,10 @@ impl HomebrewRepository {
         // Check if this request is already being processed or is recent
         {
             let current = self.current_request.lock().unwrap();
-            if let Some(ref current_name) = *current {
-                if *current_name == package_name {
+            if let Some(ref current_name) = *current
+                && *current_name == package_name {
                     return; // Already processing this package
                 }
-            }
             
             let mut pending = self.pending_requests.lock().unwrap();
             if let Some(&timestamp) = pending.get(&package_name) {
@@ -489,7 +495,7 @@ impl HomebrewRepository {
         };
         
         // Send the request to the background processor
-        if let Err(_) = self.request_sender.send(request) {
+        if self.request_sender.send(request).is_err() {
             // Channel is closed, ignore
         }
         
@@ -565,22 +571,9 @@ impl PackageRepository for HomebrewRepository {
         None
     }
 
-    fn install_package(&self, package_name: &str) -> Result<()> {
-        let output = Command::new("brew")
-            .args(&["install", package_name])
-            .output()?;
-        
-        if !output.status.success() {
-            let error_msg = String::from_utf8_lossy(&output.stderr);
-            return Err(anyhow::anyhow!("Failed to install {}: {}", package_name, error_msg));
-        }
-        
-        Ok(())
-    }
-
     fn uninstall_package(&self, package_name: &str) -> Result<()> {
         let output = Command::new("brew")
-            .args(&["uninstall", package_name])
+            .args(["uninstall", package_name])
             .output()?;
         
         if !output.status.success() {
@@ -593,7 +586,7 @@ impl PackageRepository for HomebrewRepository {
 
     fn update_package(&self, package_name: &str) -> Result<()> {
         let output = Command::new("brew")
-            .args(&["upgrade", package_name])
+            .args(["upgrade", package_name])
             .output()?;
         
         if !output.status.success() {
@@ -607,7 +600,7 @@ impl PackageRepository for HomebrewRepository {
     fn refresh_package(&self, package_name: &str) -> Result<Option<PackageInfo>> {
         // Get fresh information for a specific package
         let output = Command::new("brew")
-            .args(&["info", "--json=v2", package_name])
+            .args(["info", "--json=v2", package_name])
             .output()?;
         
         if !output.status.success() {
@@ -630,7 +623,7 @@ impl PackageRepository for HomebrewRepository {
                     return Ok(None); // Not a direct installation
                 }
                 
-                let installed_version = formula.installed
+                let latest_install = formula.installed
                     .iter()
                     .max_by(|a, b| {
                         // First compare by timestamp
@@ -640,12 +633,17 @@ impl PackageRepository for HomebrewRepository {
                         }
                         // If timestamps are equal, compare versions (considering _X revisions)
                         compare_homebrew_versions(&a.version, &b.version)
-                    })
-                    .map(|inst| inst.version.clone());
+                    });
+                
+                let (installed_version, installed_at) = match latest_install {
+                    Some(install) => (Some(install.version.clone()), Some(install.time)),
+                    None => (None, None),
+                };
+                
                 let current_version = formula.versions.stable
                     .unwrap_or_else(|| formula.versions.head.unwrap_or_else(|| "unknown".to_string()));
                 
-                let package_info = PackageInfo::new_with_full_info(
+                let package_info = PackageInfo::new_with_caveats(
                     formula.name.clone(),
                     formula.desc,
                     formula.homepage,
@@ -654,6 +652,8 @@ impl PackageRepository for HomebrewRepository {
                     PackageType::Formulae,
                     Some(formula.tap),
                     formula.outdated,
+                    formula.caveats,
+                    installed_at,
                 );
                 
                 return Ok(Some(package_info));
@@ -669,7 +669,7 @@ impl PackageRepository for HomebrewRepository {
                 let description = cask.desc
                     .unwrap_or_else(|| format!("{} (Cask application)", display_name));
                 
-                let package_info = PackageInfo::new_with_full_info(
+                let package_info = PackageInfo::new_with_caveats(
                     cask.token,
                     description,
                     cask.homepage,
@@ -678,6 +678,8 @@ impl PackageRepository for HomebrewRepository {
                     PackageType::Cask,
                     Some(cask.tap),
                     cask.outdated,
+                    cask.caveats,
+                    None, // Casks don't have installation timestamp in the JSON
                 );
                 
                 return Ok(Some(package_info));
@@ -713,13 +715,19 @@ impl PackageRepository for HomebrewRepository {
 
 /// Convert a brew Formulae JSON to our PackageInfo structure
 fn brew_formulae_to_package_info(formula: &BrewFormula) -> PackageInfo {
-    let installed_version = if !formula.installed.is_empty() {
-        Some(formula.installed[0].version.clone())
+    let (installed_version, installed_at) = if !formula.installed.is_empty() {
+        let latest_install = formula.installed
+            .iter()
+            .max_by_key(|install| install.time);
+        match latest_install {
+            Some(install) => (Some(install.version.clone()), Some(install.time)),
+            None => (None, None),
+        }
     } else {
-        None
+        (None, None)
     };
 
-    PackageInfo::new_with_type(
+    PackageInfo::new_with_caveats(
         formula.name.clone(),
         formula.desc.clone(),
         formula.homepage.clone(),
@@ -727,6 +735,9 @@ fn brew_formulae_to_package_info(formula: &BrewFormula) -> PackageInfo {
         installed_version,
         PackageType::Formulae,
         Some(formula.tap.clone()),
+        formula.outdated,
+        formula.caveats.clone(),
+        installed_at,
     )
 }
 
@@ -742,7 +753,7 @@ fn brew_cask_to_package_info(cask: &BrewCask) -> PackageInfo {
         }
     });
 
-    PackageInfo::new_with_type(
+    PackageInfo::new_with_caveats(
         cask.token.clone(),
         description,
         cask.homepage.clone(),
@@ -750,5 +761,8 @@ fn brew_cask_to_package_info(cask: &BrewCask) -> PackageInfo {
         installed_version,
         PackageType::Cask,
         Some(format!("{} (cask)", cask.tap)),
+        cask.outdated,
+        cask.caveats.clone(),
+        None, // Casks don't have installation timestamp in the JSON
     )
 }

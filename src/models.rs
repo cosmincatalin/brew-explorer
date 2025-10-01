@@ -1,6 +1,62 @@
 use serde::Deserialize;
 use std::cmp::Ordering;
 
+/// Formats a duration in seconds into a human-readable "time ago" string
+fn format_time_ago(seconds: u64) -> String {
+    const MINUTE: u64 = 60;
+    const HOUR: u64 = 60 * MINUTE;
+    const DAY: u64 = 24 * HOUR;
+    const WEEK: u64 = 7 * DAY;
+    const MONTH: u64 = 30 * DAY; // Approximate
+    const YEAR: u64 = 365 * DAY; // Approximate
+
+    if seconds < MINUTE {
+        "just now".to_string()
+    } else if seconds < HOUR {
+        let minutes = seconds / MINUTE;
+        if minutes == 1 {
+            "1 minute ago".to_string()
+        } else {
+            format!("{} minutes ago", minutes)
+        }
+    } else if seconds < DAY {
+        let hours = seconds / HOUR;
+        if hours == 1 {
+            "1 hour ago".to_string()
+        } else {
+            format!("{} hours ago", hours)
+        }
+    } else if seconds < WEEK {
+        let days = seconds / DAY;
+        if days == 1 {
+            "1 day ago".to_string()
+        } else {
+            format!("{} days ago", days)
+        }
+    } else if seconds < MONTH {
+        let weeks = seconds / WEEK;
+        if weeks == 1 {
+            "1 week ago".to_string()
+        } else {
+            format!("{} weeks ago", weeks)
+        }
+    } else if seconds < YEAR {
+        let months = seconds / MONTH;
+        if months == 1 {
+            "1 month ago".to_string()
+        } else {
+            format!("{} months ago", months)
+        }
+    } else {
+        let years = seconds / YEAR;
+        if years == 1 {
+            "1 year ago".to_string()
+        } else {
+            format!("{} years ago", years)
+        }
+    }
+}
+
 /// Compare two Homebrew version strings, considering revision suffixes (_X)
 /// Returns Ordering::Less if a < b, Ordering::Equal if a == b, Ordering::Greater if a > b
 fn compare_homebrew_versions(a: &str, b: &str) -> Ordering {
@@ -46,12 +102,10 @@ fn compare_version_strings(a: &str, b: &str) -> Ordering {
             Ordering::Equal => continue,
             other => return other,
         }
-    }
-    
-    Ordering::Equal
-}
-
-/// Represents a Homebrew package with its metadata
+        }
+        
+        Ordering::Equal
+    }/// Represents a Homebrew package with its metadata
 #[derive(Debug, Clone)]
 pub struct PackageInfo {
     pub name: String,
@@ -62,6 +116,8 @@ pub struct PackageInfo {
     pub package_type: PackageType,
     pub tap: Option<String>,
     pub outdated: bool,
+    pub caveats: Option<String>,
+    pub installed_at: Option<u64>, // Unix timestamp
 }
 
 /// Represents the type of a Homebrew package
@@ -82,20 +138,18 @@ pub struct BrewInfoResponse {
 #[derive(Debug, Deserialize)]
 pub struct BrewFormula {
     pub name: String,
-    pub full_name: String,
     pub tap: String,
     pub desc: String,
     pub homepage: String,
     pub versions: BrewVersions,
     pub installed: Vec<BrewInstalled>,
-    pub linked_keg: Option<String>,
     pub outdated: bool,
+    pub caveats: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
 pub struct BrewCask {
     pub token: String,
-    pub full_token: String,
     pub tap: String,
     pub name: Vec<String>,
     pub desc: Option<String>,
@@ -103,58 +157,24 @@ pub struct BrewCask {
     pub version: String,
     pub installed: Option<String>,
     pub outdated: bool,
+    pub caveats: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
 pub struct BrewVersions {
     pub stable: Option<String>,
     pub head: Option<String>,
-    pub bottle: bool,
 }
 
 #[derive(Debug, Deserialize)]
 pub struct BrewInstalled {
     pub version: String,
-    pub used_options: Vec<String>,
-    pub built_as_bottle: bool,
-    pub poured_from_bottle: bool,
     pub time: u64,
-    pub runtime_dependencies: Vec<BrewDependency>,
     pub installed_as_dependency: bool,
     pub installed_on_request: bool,
 }
 
-#[derive(Debug, Deserialize)]
-pub struct BrewDependency {
-    pub full_name: Option<String>,
-    pub version: Option<String>,
-    pub revision: Option<u32>,
-    pub bottle_rebuild: Option<u32>,
-    pub pkg_version: Option<String>,
-    pub declared_directly: Option<bool>,
-}
-
 impl PackageInfo {
-    /// Creates a new PackageInfo instance
-    pub fn new(
-        name: String,
-        description: String,
-        homepage: String,
-        current_version: String,
-        installed_version: Option<String>,
-    ) -> Self {
-        Self {
-            name,
-            description,
-            homepage,
-            current_version,
-            installed_version,
-            package_type: PackageType::Unknown,
-            tap: None,
-            outdated: false,
-        }
-    }
-
     /// Creates a new PackageInfo instance with type information
     pub fn new_with_type(
         name: String,
@@ -174,11 +194,13 @@ impl PackageInfo {
             package_type,
             tap,
             outdated: false,
+            caveats: None,
+            installed_at: None,
         }
     }
-
-    /// Creates a new PackageInfo instance with full information including outdated status
-    pub fn new_with_full_info(
+    /// Creates a new PackageInfo instance with all information including caveats
+    #[allow(clippy::too_many_arguments)]
+    pub fn new_with_caveats(
         name: String,
         description: String,
         homepage: String,
@@ -187,6 +209,8 @@ impl PackageInfo {
         package_type: PackageType,
         tap: Option<String>,
         outdated: bool,
+        caveats: Option<String>,
+        installed_at: Option<u64>,
     ) -> Self {
         Self {
             name,
@@ -197,6 +221,8 @@ impl PackageInfo {
             package_type,
             tap,
             outdated,
+            caveats,
+            installed_at,
         }
     }
 
@@ -232,6 +258,24 @@ impl PackageInfo {
             None => "Not installed".to_string(),
         }
     }
+    
+    /// Returns a human-readable string indicating how long ago the package was installed
+    pub fn installed_ago(&self) -> Option<String> {
+        use std::time::{SystemTime, UNIX_EPOCH};
+        
+        if let Some(timestamp) = self.installed_at {
+            let now = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .ok()?
+                .as_secs();
+            
+            if now >= timestamp {
+                let diff = now - timestamp;
+                return Some(format_time_ago(diff));
+            }
+        }
+        None
+    }
 
     /// Gets the display name with package type prefix
     pub fn get_display_name(&self) -> String {
@@ -239,15 +283,6 @@ impl PackageInfo {
             PackageType::Formulae => format!("⚙️ {}", self.name),
             PackageType::Cask => format!("🍺 {}", self.name),
             PackageType::Unknown => self.name.clone(),
-        }
-    }
-
-    /// Gets an emoji representing the package type
-    pub fn get_type_emoji(&self) -> &'static str {
-        match self.package_type {
-            PackageType::Formulae => "⚙️",
-            PackageType::Cask => "🍺",
-            PackageType::Unknown => "❓",
         }
     }
 }
@@ -268,6 +303,8 @@ mod tests {
             package_type: PackageType::Formulae,
             tap: None,
             outdated: false,
+            caveats: None,
+            installed_at: Some(1696118400), // Example timestamp
         };
         assert_eq!(package1.has_update_available(), false);
 
@@ -281,6 +318,8 @@ mod tests {
             package_type: PackageType::Formulae,
             tap: None,
             outdated: false,
+            caveats: None,
+            installed_at: Some(1696118400), // Example timestamp
         };
         assert_eq!(package2.has_update_available(), true);
 
@@ -294,6 +333,8 @@ mod tests {
             package_type: PackageType::Formulae,
             tap: None,
             outdated: false,
+            caveats: None,
+            installed_at: Some(1696118400), // Example timestamp
         };
         assert_eq!(package3.has_update_available(), true);
     }

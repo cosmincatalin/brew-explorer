@@ -1,4 +1,4 @@
-use crate::models::{PackageInfo, PackageType};
+use crate::models::PackageInfo;
 use crate::repository::PackageRepository;
 use anyhow::Result;
 use ratatui::widgets::ListState;
@@ -39,11 +39,13 @@ pub struct App {
     pub search_query: String,
     pub filtered_items: Vec<PackageInfo>,
     pub is_searching: bool,
+    pub pre_search_selection: Option<usize>, // Track selection before search started
     pub status_messages: VecDeque<(String, Instant)>,
     repository: Box<dyn PackageRepository>,
     // Multi-column layout state
     pub current_columns: usize,
     pub rows_per_column: usize,
+    pub column_scroll_offset: usize, // Track which column is the leftmost visible
     // Mock update state
     pub is_updating: bool,
     pub update_package_name: Option<String>,
@@ -69,10 +71,12 @@ impl App {
             should_quit: false,
             search_query: String::new(),
             is_searching: false,
+            pre_search_selection: None,
             status_messages: VecDeque::new(),
             repository,
             current_columns: 1,
             rows_per_column: 0,
+            column_scroll_offset: 0,
             is_updating: false,
             update_package_name: None,
             update_start_time: None,
@@ -90,6 +94,7 @@ impl App {
     pub fn refresh_packages(&mut self) -> Result<()> {
         self.items = self.repository.get_all_packages()?;
         self.apply_filter();
+        self.reset_column_scroll(); // Reset horizontal scrolling on refresh
         
         // Check for status updates from repository if it's a HomebrewRepository
         if let Some(status) = self.get_repository_status() {
@@ -133,6 +138,7 @@ impl App {
             None => 0,
         };
         self.list_state.select(Some(i));
+        self.ensure_selection_visible();
         self.reset_scroll();
     }
 
@@ -159,6 +165,7 @@ impl App {
             None => 0,
         };
         self.list_state.select(Some(i));
+        self.ensure_selection_visible();
         self.reset_scroll();
     }
 
@@ -166,6 +173,37 @@ impl App {
     pub fn reset_scroll(&mut self) {
         self.scroll_offset = 0;
         self.last_interaction = Instant::now();
+    }
+
+    /// Resets column scrolling to the beginning
+    pub fn reset_column_scroll(&mut self) {
+        self.column_scroll_offset = 0;
+    }
+
+    /// Ensures the currently selected item is visible by adjusting column scroll if needed
+    fn ensure_selection_visible(&mut self) {
+        // Use the cached layout information from the UI
+        if self.current_columns <= 1 || self.rows_per_column == 0 {
+            return; // No multi-column layout or layout not initialized yet
+        }
+
+        if let Some(selected_idx) = self.list_state.selected() {
+            // Calculate which column the selected item is in
+            let selected_column = selected_idx / self.rows_per_column;
+            
+            // Calculate the range of visible columns
+            let leftmost_visible = self.column_scroll_offset;
+            let rightmost_visible = self.column_scroll_offset + self.current_columns - 1;
+            
+            // Adjust scroll if selected column is not visible
+            if selected_column < leftmost_visible {
+                // Selected column is to the left of visible area
+                self.column_scroll_offset = selected_column;
+            } else if selected_column > rightmost_visible {
+                // Selected column is to the right of visible area
+                self.column_scroll_offset = selected_column - self.current_columns + 1;
+            }
+        }
     }
 
     /// Moves down by a page (10 items)
@@ -184,6 +222,7 @@ impl App {
         let current = self.list_state.selected().unwrap_or(0);
         let new_index = std::cmp::min(current + page_size, items_len - 1);
         self.list_state.select(Some(new_index));
+        self.ensure_selection_visible();
         self.reset_scroll();
     }
 
@@ -201,12 +240,9 @@ impl App {
 
         let page_size = 10;
         let current = self.list_state.selected().unwrap_or(0);
-        let new_index = if current >= page_size {
-            current - page_size
-        } else {
-            0
-        };
+        let new_index = current.saturating_sub(page_size);
         self.list_state.select(Some(new_index));
+        self.ensure_selection_visible();
         self.reset_scroll();
     }
 
@@ -220,6 +256,7 @@ impl App {
 
         if items_len > 0 {
             self.list_state.select(Some(0));
+            self.ensure_selection_visible();
             self.reset_scroll();
         }
     }
@@ -234,13 +271,14 @@ impl App {
 
         if items_len > 0 {
             self.list_state.select(Some(items_len - 1));
+            self.ensure_selection_visible();
             self.reset_scroll();
         }
     }
 
     /// Updates the current layout information for multi-column navigation
-    pub fn update_layout(&mut self, columns: usize, rows_per_column: usize) {
-        self.current_columns = columns;
+    pub fn update_layout(&mut self, visible_columns: usize, rows_per_column: usize) {
+        self.current_columns = visible_columns;
         self.rows_per_column = rows_per_column;
     }
 
@@ -261,7 +299,7 @@ impl App {
         }
 
         if let Some(current) = self.list_state.selected() {
-            // Calculate current column and row
+            // Calculate current column and row (considering scroll offset)
             let current_col = current / self.rows_per_column;
             let current_row = current % self.rows_per_column;
 
@@ -273,6 +311,7 @@ impl App {
                 // Make sure the new index is valid
                 if new_index < items_len {
                     self.list_state.select(Some(new_index));
+                    self.ensure_selection_visible();
                     self.reset_scroll();
                 }
             }
@@ -299,8 +338,11 @@ impl App {
             // Calculate current column and row
             let current_col = current / self.rows_per_column;
             let current_row = current % self.rows_per_column;
+            
+            // Calculate total number of columns needed
+            let total_columns = items_len.div_ceil(self.rows_per_column);
 
-            if current_col < self.current_columns - 1 {
+            if current_col < total_columns - 1 {
                 // Move to next column, same row
                 let new_col = current_col + 1;
                 let new_index = new_col * self.rows_per_column + current_row;
@@ -308,6 +350,7 @@ impl App {
                 // Make sure the new index is valid
                 if new_index < items_len {
                     self.list_state.select(Some(new_index));
+                    self.ensure_selection_visible();
                     self.reset_scroll();
                 }
             }
@@ -322,8 +365,8 @@ impl App {
             &self.items
         };
 
-        if let Some(selected) = self.list_state.selected() {
-            if selected < items.len() {
+        if let Some(selected) = self.list_state.selected()
+            && selected < items.len() {
                 let item_name = &items[selected].name;
                 let name_width = item_name.len();
 
@@ -336,7 +379,6 @@ impl App {
                         (self.scroll_offset + 1) % (max_offset + available_width / 2);
                 }
             }
-        }
     }
 
     /// Gets the currently selected package
@@ -378,36 +420,32 @@ impl App {
             let current_selection = self.list_state.selected(); // Save current selection
             
             for package in &mut self.items {
-                if package.package_type == crate::models::PackageType::Unknown {
-                    if let Some(detailed_package) = homebrew_repo.get_cached_details(&package.name) {
+                if package.package_type == crate::models::PackageType::Unknown
+                    && let Some(detailed_package) = homebrew_repo.get_cached_details(&package.name) {
                         package.package_type = detailed_package.package_type.clone();
                         package.tap = detailed_package.tap.clone();
                         list_updated = true;
                     }
-                }
             }
             
             // Update filtered items if the main list was updated, but preserve selection
             if list_updated {
                 self.apply_filter();
                 // Restore the selection after filtering
-                if let Some(selected_index) = current_selection {
-                    if selected_index < self.filtered_items.len() {
+                if let Some(selected_index) = current_selection
+                    && selected_index < self.filtered_items.len() {
                         self.list_state.select(Some(selected_index));
                     }
-                }
             }
         }
         
         if let Some(selected_package) = self.get_selected_package() {
             // Check if there are updated details available
-            if let Some(homebrew_repo) = self.repository.as_any().downcast_ref::<crate::repository::HomebrewRepository>() {
-                if homebrew_repo.has_updated_details(&selected_package.name) {
-                    if let Some(_updated_details) = homebrew_repo.get_cached_details(&selected_package.name) {
+            if let Some(homebrew_repo) = self.repository.as_any().downcast_ref::<crate::repository::HomebrewRepository>()
+                && homebrew_repo.has_updated_details(&selected_package.name)
+                    && let Some(_updated_details) = homebrew_repo.get_cached_details(&selected_package.name) {
                         // Details have been updated - no need to do anything as they're already cached
                     }
-                }
-            }
         }
     }
 
@@ -422,17 +460,30 @@ impl App {
 
     /// Starts search mode
     pub fn start_search(&mut self) {
+        // Save current selection before starting search
+        self.pre_search_selection = self.list_state.selected();
         self.is_searching = true;
         self.search_query.clear();
+        self.reset_column_scroll(); // Reset horizontal scrolling when starting search
         self.apply_filter();
     }
 
-    /// Ends search mode
+    /// Ends search mode and goes to first item
     pub fn end_search(&mut self) {
         self.is_searching = false;
         self.search_query.clear();
-        self.list_state.select(Some(0));
-        self.reset_scroll();
+        
+        // Always go to the first item (index 0)
+        if !self.items.is_empty() {
+            self.list_state.select(Some(0));
+            // Reset column scroll to show the first item
+            self.column_scroll_offset = 0;
+            self.reset_scroll();
+        } else {
+            self.list_state.select(None);
+            self.column_scroll_offset = 0;
+            self.reset_scroll();
+        }
     }
 
     /// Adds a character to the search query
@@ -475,17 +526,6 @@ impl App {
             self.list_state.select(None);
         }
         self.reset_scroll();
-    }
-
-    /// Installs the currently selected package
-    pub fn install_selected_package(&mut self) -> Result<()> {
-        if let Some(package) = self.get_selected_package() {
-            if !package.is_installed() {
-                self.repository.install_package(&package.name)?;
-                self.refresh_packages()?;
-            }
-        }
-        Ok(())
     }
 
     /// Uninstalls the currently selected package
@@ -655,11 +695,10 @@ impl App {
             
             if max_index == 0 {
                 self.list_state.select(None);
-            } else if let Some(selected) = self.list_state.selected() {
-                if selected >= max_index {
+            } else if let Some(selected) = self.list_state.selected()
+                && selected >= max_index {
                     self.list_state.select(Some(max_index - 1));
                 }
-            }
             
             self.add_status_message(format!("✅ Successfully uninstalled {}", name));
         }
@@ -680,7 +719,7 @@ impl App {
         // Refresh only the updated package's metadata after a small delay
         if let Some(name) = package_name {
             // Add a small delay to ensure brew has updated its internal state
-            std::thread::sleep(std::time::Duration::from_millis(500));
+            std::thread::sleep(Duration::from_millis(500));
             
             if let Err(e) = self.refresh_single_package(name.clone()) {
                 self.add_status_message(format!("⚠️  Failed to refresh {}: {}", name, e));
@@ -791,12 +830,6 @@ impl App {
         Ok(())
     }
 
-    /// Closes any open modal
-    pub fn close_modal(&mut self) {
-        self.modal_state = ModalState::None;
-        self.pending_uninstall_package = None;
-    }
-
     /// Confirms the uninstall operation
     pub fn confirm_uninstall(&mut self) {
         if let Some(package_name) = self.pending_uninstall_package.take() {
@@ -822,11 +855,10 @@ impl App {
                 }
                 
                 // Update the package in filtered list if we're searching
-                if self.is_searching {
-                    if let Some(index) = self.filtered_items.iter().position(|p| p.name == package_name) {
+                if self.is_searching
+                    && let Some(index) = self.filtered_items.iter().position(|p| p.name == package_name) {
                         self.filtered_items[index] = updated_package;
                     }
-                }
                 
                 self.add_status_message(format!("📦 Refreshed metadata for {}", package_name));
             }

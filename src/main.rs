@@ -59,17 +59,15 @@ fn main() -> Result<()> {
         }
         
         // Handle any key events during loading (allow quit)
-        if poll(Duration::from_millis(50))? {
-            if let Event::Key(key) = event::read()? {
-                if key.kind == KeyEventKind::Press && key.code == crossterm::event::KeyCode::Char('q') {
+        if poll(Duration::from_millis(50))?
+            && let Event::Key(key) = event::read()?
+                && key.kind == KeyEventKind::Press && key.code == event::KeyCode::Char('q') {
                     // Cleanup and exit
                     disable_raw_mode()?;
                     execute!(terminal.backend_mut(), LeaveAlternateScreen, DisableMouseCapture)?;
                     terminal.show_cursor()?;
                     return Ok(());
                 }
-            }
-        }
         
         thread::sleep(Duration::from_millis(50));
     };
@@ -104,13 +102,11 @@ fn run_app<B: Backend>(terminal: &mut Terminal<B>, app: &mut App) -> Result<()> 
             .checked_sub(last_tick.elapsed())
             .unwrap_or_else(|| Duration::from_secs(0));
 
-        if crossterm::event::poll(timeout)? {
-            if let Event::Key(key) = event::read()? {
-                if key.kind == KeyEventKind::Press {
+        if poll(timeout)?
+            && let Event::Key(key) = event::read()?
+                && key.kind == KeyEventKind::Press {
                     handle_key_event(app, key)?;
                 }
-            }
-        }
 
         if last_tick.elapsed() >= tick_rate {
             // Update scroll offset for auto-scrolling
@@ -146,7 +142,7 @@ fn run_app<B: Backend>(terminal: &mut Terminal<B>, app: &mut App) -> Result<()> 
         
         // Refresh package list every 2 seconds to pick up cached packages
         if last_refresh.elapsed() >= Duration::from_secs(2) {
-            if let Err(_) = app.refresh_package_list() {
+            if app.refresh_package_list().is_err() {
                 // Ignore refresh errors to avoid crashing the app
             }
             last_refresh = Instant::now();

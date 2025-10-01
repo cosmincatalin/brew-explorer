@@ -120,7 +120,7 @@ fn render_package_list(f: &mut Frame, app: &mut App, area: ratatui::layout::Rect
     // Calculate optimal number of columns based on available width
     // Assume minimum 25 characters per package name + 3 characters padding
     let min_column_width = 28;
-    let max_columns = (available_width / min_column_width).max(1).min(4); // Cap at 4 columns for readability
+    let max_visible_columns = (available_width / min_column_width).clamp(1, 4); // Cap at 4 columns for readability
     
     let total_items = if app.is_searching {
         app.filtered_items.len()
@@ -128,28 +128,53 @@ fn render_package_list(f: &mut Frame, app: &mut App, area: ratatui::layout::Rect
         app.items.len()
     };
     
-    // Determine actual number of columns based on item count and available space
-    let optimal_columns = if total_items < max_columns {
-        total_items.max(1)
-    } else {
-        max_columns
-    };
-    
-    let rows_per_column = (total_items + optimal_columns - 1) / optimal_columns; // Ceiling division
-    
-    // Update the app's layout information for navigation
-    app.update_layout(optimal_columns, rows_per_column);
-    
-    let items = app.get_display_items();
-    
     // Create title
     let title = if app.is_searching {
-        format!("Packages (Search: {})", app.search_query)
+        if total_items == 0 {
+            format!("Packages (Search: {}) - No results", app.search_query)
+        } else {
+            format!("Packages (Search: {})", app.search_query)
+        }
     } else {
         "Packages".to_string()
     };
+    
+    if total_items == 0 {
+        // Render empty list with message
+        let empty_list = List::new(Vec::<ListItem>::new())
+            .block(Block::default().borders(Borders::ALL).title(title))
+            .highlight_style(
+                Style::default()
+                    .bg(Color::Blue)
+                    .add_modifier(Modifier::BOLD),
+            );
+        f.render_stateful_widget(empty_list, area, &mut app.list_state);
+        return;
+    }
+    
+    // Calculate the ideal rows per column for good distribution
+    let ideal_rows_per_column = (area.height.saturating_sub(3)) as usize; // Account for borders and title
+    let ideal_rows_per_column = ideal_rows_per_column.max(1);
+    
+    // Calculate total columns needed to display all items
+    let total_columns_needed = total_items.div_ceil(ideal_rows_per_column);
+    
+    // Determine how many columns we can actually show
+    let visible_columns = max_visible_columns.min(total_columns_needed);
+    let rows_per_column = if total_columns_needed <= visible_columns {
+        // All columns fit, distribute items evenly
+        total_items.div_ceil(visible_columns)
+    } else {
+        // More columns than can fit, use ideal row count
+        ideal_rows_per_column
+    };
+    
+    // Update the app's layout information for navigation
+    app.update_layout(visible_columns, rows_per_column);
+    
+    let items = app.get_display_items();
 
-    if optimal_columns == 1 {
+    if visible_columns == 1 {
         // Fall back to single column list for narrow spaces
         let list_items: Vec<ListItem> = items
             .iter()
@@ -179,23 +204,31 @@ fn render_package_list(f: &mut Frame, app: &mut App, area: ratatui::layout::Rect
         f.render_stateful_widget(items_list, area, &mut app.list_state);
     } else {
         // Multi-column layout using table
-        let column_width = available_width / optimal_columns;
+        let column_width = available_width / visible_columns;
+        
+        // Calculate total columns needed
+        let total_columns = total_columns_needed;
         
         // Create column constraints - equal width for all columns
-        let constraints: Vec<Constraint> = (0..optimal_columns)
-            .map(|_| Constraint::Percentage((100 / optimal_columns) as u16))
+        let constraints: Vec<Constraint> = (0..visible_columns)
+            .map(|_| Constraint::Percentage((100 / visible_columns) as u16))
             .collect();
         
         // Build rows for the table
         let mut table_rows: Vec<Row> = Vec::new();
         
+        // Debug: check current selection
+        let selected_idx = app.list_state.selected();
+        
         for row_idx in 0..rows_per_column {
             let mut cells: Vec<Span> = Vec::new();
             
-            for col_idx in 0..optimal_columns {
-                let item_idx = col_idx * rows_per_column + row_idx;
+            for visible_col_idx in 0..visible_columns {
+                // Calculate the actual column index considering scroll offset
+                let actual_col_idx = app.column_scroll_offset + visible_col_idx;
+                let item_idx = actual_col_idx * rows_per_column + row_idx;
                 
-                if item_idx < items.len() {
+                if item_idx < items.len() && actual_col_idx < total_columns {
                     let package = &items[item_idx];
                     let display_name = package.get_display_name();
                     
@@ -208,10 +241,10 @@ fn render_package_list(f: &mut Frame, app: &mut App, area: ratatui::layout::Rect
                         display_name
                     };
                     
-                    let style = get_package_style(&package);
+                    let style = get_package_style(package);
                     
                     // Check if this item is selected
-                    let is_selected = app.list_state.selected() == Some(item_idx);
+                    let is_selected = selected_idx == Some(item_idx);
                     let final_style = if is_selected {
                         style.bg(Color::Blue).add_modifier(Modifier::BOLD)
                     } else {
@@ -289,7 +322,7 @@ fn render_package_details(f: &mut Frame, app: &App, area: ratatui::layout::Rect)
                 .borders(Borders::ALL)
                 .title("Package Details"),
         )
-        .wrap(Wrap { trim: true });
+        .wrap(Wrap { trim: false });
 
     f.render_widget(details_paragraph, area);
 
@@ -309,29 +342,30 @@ fn create_package_details_text(package: &crate::models::PackageInfo) -> Text<'_>
         Color::Red
     };
 
-    Text::from(vec![
+    let mut lines = vec![
         Line::from(vec![
             Span::styled("Name: ", Style::default().add_modifier(Modifier::BOLD)),
             Span::raw(&package.name),
         ]),
         Line::from(""),
-        Line::from(vec![Span::styled(
-            "Description: ",
-            Style::default().add_modifier(Modifier::BOLD),
-        )]),
-        Line::from(Span::raw(&package.description)),
+        Line::from(vec![
+            Span::styled("Description: ", Style::default().add_modifier(Modifier::BOLD)),
+            Span::raw(&package.description),
+        ]),
+        Line::from(""),
+        Line::from(vec![
+            Span::styled("Tap: ", Style::default().add_modifier(Modifier::BOLD)),
+            Span::raw(package.tap.as_deref().unwrap_or("unknown")),
+        ]),
+        Line::from(""),
+        Line::from(vec![
+            Span::styled("Caveats: ", Style::default().add_modifier(Modifier::BOLD)),
+            Span::raw(package.caveats.as_deref().unwrap_or("none")),
+        ]),
         Line::from(""),
         Line::from(vec![
             Span::styled("Homepage: ", Style::default().add_modifier(Modifier::BOLD)),
             Span::styled(&package.homepage, Style::default().fg(Color::Blue)),
-        ]),
-        Line::from(""),
-        Line::from(vec![
-            Span::styled(
-                "Current Version: ",
-                Style::default().add_modifier(Modifier::BOLD),
-            ),
-            Span::raw(&package.current_version),
         ]),
         Line::from(""),
         Line::from(vec![
@@ -342,51 +376,70 @@ fn create_package_details_text(package: &crate::models::PackageInfo) -> Text<'_>
             Span::styled(installed_status, Style::default().fg(status_colour)),
         ]),
         Line::from(""),
+        Line::from(vec![
+            Span::styled(
+                "Current Version: ",
+                Style::default().add_modifier(Modifier::BOLD),
+            ),
+            Span::raw(&package.current_version),
+        ]),
         Line::from(""),
-        create_action_hints(package),
-    ])
+    ];
+    
+    // Add installation time if available
+    if let Some(time_ago) = package.installed_ago() {
+        lines.push(Line::from(vec![
+            Span::styled(
+                "Installed: ",
+                Style::default().add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(time_ago, Style::default().fg(Color::Cyan)),
+        ]));
+        lines.push(Line::from(""));
+    }
+    
+    lines.push(Line::from(""));
+    
+    // Add the action hints as separate lines
+    lines.extend(create_action_hints(package));
+    
+    Text::from(lines)
 }
 
 /// Creates action hints based on package state
-fn create_action_hints(package: &crate::models::PackageInfo) -> Line<'_> {
+fn create_action_hints(package: &crate::models::PackageInfo) -> Vec<Line<'_>> {
+    let mut lines = vec![
+        Line::from(vec![
+            Span::styled("⚡ Actions:", Style::default().add_modifier(Modifier::BOLD).fg(Color::Cyan))
+        ]),
+        Line::from("")
+    ];
+    
     if package.is_installed() {
-        // Create action list for installed packages
-        let mut actions = vec![
-            Span::styled("⚡ Actions:", Style::default().add_modifier(Modifier::BOLD).fg(Color::Cyan)),
-            Span::raw("\n"),
-            Span::raw("  "),
-            Span::styled("* ", Style::default().fg(Color::White)),
+        // Add uninstall action
+        lines.push(Line::from(vec![
+            Span::raw("    ◦ "),
             Span::styled("uninstall", Style::default().fg(Color::Red).add_modifier(Modifier::BOLD)),
             Span::styled(" (press 'x' to remove)", Style::default().fg(Color::Gray)),
-        ];
+        ]));
         
         // Only add update action if update is available
         if package.has_update_available() {
-            actions.extend(vec![
-                Span::raw("\n"),
-                Span::raw("  "),
-                Span::styled("* ", Style::default().fg(Color::White)),
+            lines.push(Line::from(vec![
+                Span::raw("    ◦ "),
                 Span::styled("update", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
                 Span::styled(" (press 'u' to update)", Style::default().fg(Color::Gray)),
-            ]);
+            ]));
         }
-        
-        Line::from(actions)
-    } else {
-        Line::from(vec![
-            Span::styled("⚡ Actions:", Style::default().add_modifier(Modifier::BOLD).fg(Color::Cyan)),
-            Span::raw("\n"),
-            Span::raw("  "),
-            Span::styled("* ", Style::default().fg(Color::White)),
-            Span::styled("install", Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)),
-            Span::styled(" (press 'i' to install)", Style::default().fg(Color::Gray)),
-        ])
     }
+    // Note: Install action removed - only show actions for installed packages
+    
+    lines
 }
 
 /// Renders help text at the bottom of the details panel
 fn render_help_text(f: &mut Frame, area: ratatui::layout::Rect) {
-    let help_text = "Navigate: ↑/↓ ←/→ | Search: / | Actions: i/u/x | Quit: q";
+    let help_text = "Navigate: ↑/↓ ←/→ | Search: / | Actions: u/x | Quit: q";
     let help_paragraph = Paragraph::new(help_text).style(Style::default().fg(Color::Gray));
 
     let help_area = area.inner(Margin {
@@ -412,7 +465,7 @@ fn render_status_bar(f: &mut Frame, app: &mut App, area: ratatui::layout::Rect) 
     } else if let Some(message) = app.get_current_status() {
         message
     } else {
-        "Navigate: ↑/↓ ←/→ PgUp/PgDn Home/End | Search: / | Actions: i/u/x | Quit: q".to_string()
+        "Navigate: ↑/↓ ←/→ PgUp/PgDn Home/End | Search: / | Actions: u/x | Quit: q".to_string()
     };
 
     let status_paragraph = Paragraph::new(status_text)
