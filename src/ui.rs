@@ -1,12 +1,93 @@
 use crate::app::App;
 use ratatui::{
-    layout::{Constraint, Direction, Layout, Margin},
+    layout::{Alignment, Constraint, Direction, Layout, Margin},
     style::{Color, Modifier, Style},
     text::{Line, Span, Text},
-    widgets::{Block, Borders, List, ListItem, Paragraph, Wrap},
+    widgets::{Block, Borders, List, ListItem, Paragraph, Row, Table, Wrap},
     Frame,
 };
 use std::time::Duration;
+
+/// Renders a fancy loading screen with ASCII art
+pub fn render_loading_screen(f: &mut Frame, loading_dots: usize, elapsed: std::time::Duration) {
+    let area = f.area();
+    
+    // ASCII art for "Brew Explorer"
+    let ascii_art = vec![
+        "  ██████╗ ██████╗ ███████╗██╗    ██╗",
+        "  ██╔══██╗██╔══██╗██╔════╝██║    ██║",
+        "  ██████╔╝██████╔╝█████╗  ██║ █╗ ██║",
+        "  ██╔══██╗██╔══██╗██╔══╝  ██║███╗██║",
+        "  ██████╔╝██║  ██║███████╗╚███╔███╔╝",
+        "  ╚═════╝ ╚═╝  ╚═╝╚══════╝ ╚══╝╚══╝ ",
+        "",
+        "███████╗██╗  ██╗██████╗ ██╗      ██████╗ ██████╗ ███████╗██████╗ ",
+        "██╔════╝╚██╗██╔╝██╔══██╗██║     ██╔═══██╗██╔══██╗██╔════╝██╔══██╗",
+        "█████╗   ╚███╔╝ ██████╔╝██║     ██║   ██║██████╔╝█████╗  ██████╔╝",
+        "██╔══╝   ██╔██╗ ██╔═══╝ ██║     ██║   ██║██╔══██╗██╔══╝  ██╔══██╗",
+        "███████╗██╔╝ ██╗██║     ███████╗╚██████╔╝██║  ██║███████╗██║  ██║",
+        "╚══════╝╚═╝  ╚═╝╚═╝     ╚══════╝ ╚═════╝ ╚═╝  ╚═╝╚══════╝╚═╝  ╚═╝",
+    ];
+    
+    // Create centered layout
+    let vertical_layout = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Percentage(25),
+            Constraint::Length(ascii_art.len() as u16),
+            Constraint::Length(5),
+            Constraint::Percentage(25),
+        ])
+        .split(area);
+    
+    // ASCII art block
+    let ascii_lines: Vec<Line> = ascii_art
+        .iter()
+        .map(|line| Line::from(Span::styled(*line, Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD))))
+        .collect();
+    
+    let ascii_block = Paragraph::new(ascii_lines)
+        .alignment(Alignment::Center)
+        .block(Block::default());
+    
+    f.render_widget(ascii_block, vertical_layout[1]);
+    
+    // Loading message with animated dots
+    let dots = match loading_dots {
+        0 => "   ",
+        1 => ".  ",
+        2 => ".. ",
+        3 => "...",
+        _ => "   ", // Reset to empty for smoother animation
+    };
+    
+    // Calculate elapsed seconds for display
+    let elapsed_secs = elapsed.as_secs();
+    let elapsed_display = if elapsed_secs > 0 {
+        format!(" ({}s)", elapsed_secs)
+    } else {
+        String::new()
+    };
+    
+    let loading_text = vec![
+        Line::from(vec![
+            Span::styled("🍺 ", Style::default()),
+            Span::styled("Loading Homebrew packages", Style::default().fg(Color::Yellow)),
+            Span::styled(dots, Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
+            Span::styled(elapsed_display, Style::default().fg(Color::Gray)),
+        ]),
+        Line::from(""),
+        Line::from(Span::styled("This usually takes about 5 seconds", Style::default().fg(Color::Gray))),
+        Line::from(""),
+        Line::from(Span::styled("Press 'q' to quit", Style::default().fg(Color::DarkGray))),
+    ];
+    
+    let loading_block = Paragraph::new(loading_text)
+        .alignment(Alignment::Center)
+        .block(Block::default());
+    
+    f.render_widget(loading_block, vertical_layout[2]);
+}
 
 /// Renders the main UI
 pub fn render_ui(f: &mut Frame, app: &mut App) {
@@ -27,48 +108,138 @@ pub fn render_ui(f: &mut Frame, app: &mut App) {
     render_status_bar(f, app, main_chunks[1]);
 }
 
-/// Renders the package list on the left panel
+/// Renders the package list on the left panel with dynamic columns
 fn render_package_list(f: &mut Frame, app: &mut App, area: ratatui::layout::Rect) {
     let available_width = area.width.saturating_sub(4) as usize; // Account for borders
+
+    // Calculate optimal number of columns based on available width
+    // Assume minimum 25 characters per package name + 3 characters padding
+    let min_column_width = 28;
+    let max_columns = (available_width / min_column_width).max(1).min(4); // Cap at 4 columns for readability
+    
+    let total_items = if app.is_searching {
+        app.filtered_items.len()
+    } else {
+        app.items.len()
+    };
+    
+    // Determine actual number of columns based on item count and available space
+    let optimal_columns = if total_items < max_columns {
+        total_items.max(1)
+    } else {
+        max_columns
+    };
+    
+    let rows_per_column = (total_items + optimal_columns - 1) / optimal_columns; // Ceiling division
+    
+    // Update the app's layout information for navigation
+    app.update_layout(optimal_columns, rows_per_column);
+    
     let items = app.get_display_items();
-
-    let list_items: Vec<ListItem> = items
-        .iter()
-        .enumerate()
-        .map(|(i, package)| {
-            let content = if Some(i) == app.list_state.selected() {
-                // Apply horizontal scrolling to the selected item
-                apply_horizontal_scroll(&package.name, available_width, app)
-            } else {
-                package.name.clone()
-            };
-
-            let style = if package.is_installed() {
-                Style::default().fg(Color::Green)
-            } else {
-                Style::default().fg(Color::White)
-            };
-
-            ListItem::new(Line::from(Span::styled(content, style)))
-        })
-        .collect();
-
+    
+    // Create title
     let title = if app.is_searching {
         format!("Packages (Search: {})", app.search_query)
     } else {
         "Packages".to_string()
     };
 
-    let items_list = List::new(list_items)
-        .block(Block::default().borders(Borders::ALL).title(title))
-        .highlight_style(
-            Style::default()
-                .bg(Color::Blue)
-                .add_modifier(Modifier::BOLD),
-        )
-        .highlight_symbol(">> ");
+    if optimal_columns == 1 {
+        // Fall back to single column list for narrow spaces
+        let list_items: Vec<ListItem> = items
+            .iter()
+            .enumerate()
+            .map(|(i, package)| {
+                let display_name = package.get_display_name();
+                let content = if Some(i) == app.list_state.selected() {
+                    apply_horizontal_scroll(&display_name, available_width, app)
+                } else {
+                    display_name
+                };
 
-    f.render_stateful_widget(items_list, area, &mut app.list_state);
+                let style = get_package_style(package);
+                ListItem::new(Line::from(Span::styled(content, style)))
+            })
+            .collect();
+
+        let items_list = List::new(list_items)
+            .block(Block::default().borders(Borders::ALL).title(title))
+            .highlight_style(
+                Style::default()
+                    .bg(Color::Blue)
+                    .add_modifier(Modifier::BOLD),
+            )
+            .highlight_symbol(">> ");
+
+        f.render_stateful_widget(items_list, area, &mut app.list_state);
+    } else {
+        // Multi-column layout using table
+        let column_width = available_width / optimal_columns;
+        
+        // Create column constraints - equal width for all columns
+        let constraints: Vec<Constraint> = (0..optimal_columns)
+            .map(|_| Constraint::Percentage((100 / optimal_columns) as u16))
+            .collect();
+        
+        // Build rows for the table
+        let mut table_rows: Vec<Row> = Vec::new();
+        
+        for row_idx in 0..rows_per_column {
+            let mut cells: Vec<Span> = Vec::new();
+            
+            for col_idx in 0..optimal_columns {
+                let item_idx = col_idx * rows_per_column + row_idx;
+                
+                if item_idx < items.len() {
+                    let package = &items[item_idx];
+                    let display_name = package.get_display_name();
+                    
+                    // Truncate name to fit column width
+                    let truncated_name = if display_name.len() > column_width - 2 {
+                        format!("{}…", &display_name[..column_width.saturating_sub(3)])
+                    } else {
+                        display_name
+                    };
+                    
+                    let style = get_package_style(&package);
+                    
+                    // Check if this item is selected
+                    let is_selected = app.list_state.selected() == Some(item_idx);
+                    let final_style = if is_selected {
+                        style.bg(Color::Blue).add_modifier(Modifier::BOLD)
+                    } else {
+                        style
+                    };
+                    
+                    let prefix = if is_selected { ">> " } else { "   " };
+                    cells.push(Span::styled(format!("{}{}", prefix, truncated_name), final_style));
+                } else {
+                    // Empty cell for alignment
+                    cells.push(Span::raw(""));
+                }
+            }
+            
+            table_rows.push(Row::new(cells));
+        }
+        
+        let table = Table::new(table_rows, constraints)
+            .block(Block::default().borders(Borders::ALL).title(title))
+            .column_spacing(1);
+        
+        f.render_widget(table, area);
+    }
+}
+
+/// Gets the appropriate style for a package based on its status
+fn get_package_style(package: &crate::models::PackageInfo) -> Style {
+    if package.outdated || package.has_update_available() {
+        // Use a more visible reddish color for packages with updates available
+        Style::default().fg(Color::Rgb(220, 80, 80)) // Soft reddish color
+    } else if package.is_installed() {
+        Style::default().fg(Color::Green)
+    } else {
+        Style::default().fg(Color::White)
+    }
 }
 
 /// Applies horizontal scrolling to a package name
@@ -121,7 +292,10 @@ fn render_package_details(f: &mut Frame, app: &App, area: ratatui::layout::Rect)
 /// Creates the detailed text for a package
 fn create_package_details_text(package: &crate::models::PackageInfo) -> Text<'_> {
     let installed_status = package.installation_status();
-    let status_colour = if package.is_installed() {
+    let status_colour = if package.outdated || package.has_update_available() {
+        // Use the same reddish color for packages with updates available
+        Color::Rgb(220, 80, 80) // Soft reddish color
+    } else if package.is_installed() {
         Color::Green
     } else {
         Color::Red
@@ -194,7 +368,7 @@ fn create_action_hints(package: &crate::models::PackageInfo) -> Line<'_> {
 
 /// Renders help text at the bottom of the details panel
 fn render_help_text(f: &mut Frame, area: ratatui::layout::Rect) {
-    let help_text = "Navigate: ↑/↓ or j/k | Search: / | Actions: i/u/x | Quit: q";
+    let help_text = "Navigate: ↑/↓ ←/→ or hjkl | Search: / | Actions: i/u/x | Quit: q";
     let help_paragraph = Paragraph::new(help_text).style(Style::default().fg(Color::Gray));
 
     let help_area = area.inner(Margin {
@@ -217,7 +391,7 @@ fn render_status_bar(f: &mut Frame, app: &mut App, area: ratatui::layout::Rect) 
     let status_text = if let Some(message) = app.get_current_status() {
         message
     } else {
-        "Navigate: ↑/↓ or j/k | Search: / | Actions: i/u/x | Quit: q".to_string()
+        "Navigate: ↑/↓ ←/→ hjkl PgUp/PgDn Home/End | Search: / | Actions: i/u/x | Quit: q".to_string()
     };
 
     let status_paragraph = Paragraph::new(status_text)

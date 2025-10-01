@@ -17,6 +17,9 @@ pub struct App {
     pub is_searching: bool,
     pub status_messages: VecDeque<(String, Instant)>,
     repository: Box<dyn PackageRepository>,
+    // Multi-column layout state
+    pub current_columns: usize,
+    pub rows_per_column: usize,
 }
 
 impl App {
@@ -34,6 +37,8 @@ impl App {
             is_searching: false,
             status_messages: VecDeque::new(),
             repository,
+            current_columns: 1,
+            rows_per_column: 0,
         };
         app.list_state.select(Some(0));
         Ok(app)
@@ -121,6 +126,152 @@ impl App {
         self.last_interaction = Instant::now();
     }
 
+    /// Moves down by a page (10 items)
+    pub fn page_down(&mut self) {
+        let items_len = if self.is_searching {
+            self.filtered_items.len()
+        } else {
+            self.items.len()
+        };
+
+        if items_len == 0 {
+            return;
+        }
+
+        let page_size = 10;
+        let current = self.list_state.selected().unwrap_or(0);
+        let new_index = std::cmp::min(current + page_size, items_len - 1);
+        self.list_state.select(Some(new_index));
+        self.reset_scroll();
+    }
+
+    /// Moves up by a page (10 items)
+    pub fn page_up(&mut self) {
+        let items_len = if self.is_searching {
+            self.filtered_items.len()
+        } else {
+            self.items.len()
+        };
+
+        if items_len == 0 {
+            return;
+        }
+
+        let page_size = 10;
+        let current = self.list_state.selected().unwrap_or(0);
+        let new_index = if current >= page_size {
+            current - page_size
+        } else {
+            0
+        };
+        self.list_state.select(Some(new_index));
+        self.reset_scroll();
+    }
+
+    /// Moves to the first item
+    pub fn first(&mut self) {
+        let items_len = if self.is_searching {
+            self.filtered_items.len()
+        } else {
+            self.items.len()
+        };
+
+        if items_len > 0 {
+            self.list_state.select(Some(0));
+            self.reset_scroll();
+        }
+    }
+
+    /// Moves to the last item
+    pub fn go_to_last(&mut self) {
+        let items_len = if self.is_searching {
+            self.filtered_items.len()
+        } else {
+            self.items.len()
+        };
+
+        if items_len > 0 {
+            self.list_state.select(Some(items_len - 1));
+            self.reset_scroll();
+        }
+    }
+
+    /// Updates the current layout information for multi-column navigation
+    pub fn update_layout(&mut self, columns: usize, rows_per_column: usize) {
+        self.current_columns = columns;
+        self.rows_per_column = rows_per_column;
+    }
+
+    /// Moves left to the previous column (only makes sense in multi-column layout)
+    pub fn move_left(&mut self) {
+        if self.current_columns <= 1 {
+            return; // No horizontal movement in single column
+        }
+
+        let items_len = if self.is_searching {
+            self.filtered_items.len()
+        } else {
+            self.items.len()
+        };
+
+        if items_len == 0 {
+            return;
+        }
+
+        if let Some(current) = self.list_state.selected() {
+            // Calculate current column and row
+            let current_col = current / self.rows_per_column;
+            let current_row = current % self.rows_per_column;
+
+            if current_col > 0 {
+                // Move to previous column, same row
+                let new_col = current_col - 1;
+                let new_index = new_col * self.rows_per_column + current_row;
+                
+                // Make sure the new index is valid
+                if new_index < items_len {
+                    self.list_state.select(Some(new_index));
+                    self.reset_scroll();
+                }
+            }
+        }
+    }
+
+    /// Moves right to the next column (only makes sense in multi-column layout)
+    pub fn move_right(&mut self) {
+        if self.current_columns <= 1 {
+            return; // No horizontal movement in single column
+        }
+
+        let items_len = if self.is_searching {
+            self.filtered_items.len()
+        } else {
+            self.items.len()
+        };
+
+        if items_len == 0 {
+            return;
+        }
+
+        if let Some(current) = self.list_state.selected() {
+            // Calculate current column and row
+            let current_col = current / self.rows_per_column;
+            let current_row = current % self.rows_per_column;
+
+            if current_col < self.current_columns - 1 {
+                // Move to next column, same row
+                let new_col = current_col + 1;
+                let new_index = new_col * self.rows_per_column + current_row;
+                
+                // Make sure the new index is valid
+                if new_index < items_len {
+                    self.list_state.select(Some(new_index));
+                    self.reset_scroll();
+                }
+            }
+        }
+    }
+
     /// Updates the horizontal scroll offset for long package names
     pub fn update_scroll(&mut self, available_width: usize) {
         let items = if self.is_searching {
@@ -178,6 +329,31 @@ impl App {
             if homebrew_repo.update_loading_animations() {
                 // Animation state changed, we might want to refresh if showing loading text
                 // The UI will automatically get the updated text when it calls get_selected_package_details
+            }
+            
+            // Update package types in the main list when details become available
+            let mut list_updated = false;
+            let current_selection = self.list_state.selected(); // Save current selection
+            
+            for package in &mut self.items {
+                if package.package_type == crate::models::PackageType::Unknown {
+                    if let Some(detailed_package) = homebrew_repo.get_cached_details(&package.name) {
+                        package.package_type = detailed_package.package_type.clone();
+                        package.tap = detailed_package.tap.clone();
+                        list_updated = true;
+                    }
+                }
+            }
+            
+            // Update filtered items if the main list was updated, but preserve selection
+            if list_updated {
+                self.apply_filter();
+                // Restore the selection after filtering
+                if let Some(selected_index) = current_selection {
+                    if selected_index < self.filtered_items.len() {
+                        self.list_state.select(Some(selected_index));
+                    }
+                }
             }
         }
         

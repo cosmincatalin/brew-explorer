@@ -10,7 +10,7 @@ use std::process::Command;
 use serde_json;
 
 /// Trait for package repository operations
-pub trait PackageRepository: Any {
+pub trait PackageRepository: Any + Send + Sync {
     fn get_all_packages(&self) -> Result<Vec<PackageInfo>>;
     fn get_package_details(&self, package_name: &str) -> Option<PackageInfo>;
     fn install_package(&self, package_name: &str) -> Result<()>;
@@ -41,17 +41,18 @@ pub struct HomebrewRepository {
 }
 
 /// Helper functions for calling brew commands
-fn brew_list() -> Result<Vec<String>> {
+fn brew_info_all_installed() -> Result<BrewInfoResponse> {
     let output = Command::new("brew")
-        .args(&["list"])
+        .args(&["info", "--json=v2", "--installed"])
         .output()?;
     
     if !output.status.success() {
-        return Err(anyhow::anyhow!("brew list command failed"));
+        return Err(anyhow::anyhow!("brew info --json=v2 --installed command failed"));
     }
     
     let output_str = String::from_utf8(output.stdout)?;
-    Ok(output_str.lines().map(|s| s.to_string()).collect())
+    let response: BrewInfoResponse = serde_json::from_str(&output_str)?;
+    Ok(response)
 }
 
 fn brew_info(package_name: &str) -> Result<BrewInfoResponse> {
@@ -91,39 +92,80 @@ impl HomebrewRepository {
             Self::process_requests(request_receiver, cache_clone, status_clone, current_request_clone, pending_requests_clone);
         });
         
-        // Load installed package names immediately (synchronously)
-        match brew_list() {
-            Ok(package_names) => {
-                // Create placeholder PackageInfo entries for each installed package
-                // We'll fetch detailed info only when the package is selected
-                for package_name in package_names {
-                    installed_packages.push(PackageInfo::new(
-                        package_name.clone(),
-                        "Loading package information.".to_string(), // Start with single dot
-                        "".to_string(),
-                        "...".to_string(),
-                        Some("installed".to_string()), // Mark as installed since it came from list()
+        // Load all installed packages with full information immediately (synchronously)
+        match brew_info_all_installed() {
+            Ok(brew_response) => {
+                // Process formulae - only include packages installed directly (not as dependencies)
+                for formula in brew_response.formulae {
+                    // Check if this formulae was installed directly by looking at the installation info
+                    let is_directly_installed = formula.installed.iter().any(|install_info| {
+                        install_info.installed_on_request || !install_info.installed_as_dependency
+                    });
+                    
+                    // Skip packages that were only installed as dependencies
+                    if !is_directly_installed {
+                        continue;
+                    }
+                    
+                    let installed_version = formula.installed.first()
+                        .map(|inst| inst.version.clone());
+                    let current_version = formula.versions.stable
+                        .unwrap_or_else(|| formula.versions.head.unwrap_or_else(|| "unknown".to_string()));
+                    
+                    installed_packages.push(PackageInfo::new_with_full_info(
+                        formula.name.clone(),
+                        formula.desc,
+                        formula.homepage,
+                        current_version,
+                        installed_version,
+                        PackageType::Formulae,
+                        Some(formula.tap),
+                        formula.outdated,
+                    ));
+                }
+                
+                // Process casks
+                for cask in brew_response.casks {
+                    let display_name = cask.name.first()
+                        .unwrap_or(&cask.token)
+                        .clone();
+                    let description = cask.desc
+                        .unwrap_or_else(|| format!("{} (Cask application)", display_name));
+                    
+                    installed_packages.push(PackageInfo::new_with_full_info(
+                        cask.token,
+                        description,
+                        cask.homepage,
+                        cask.version.clone(),
+                        cask.installed.clone(),
+                        PackageType::Cask,
+                        Some(cask.tap),
+                        cask.outdated,
                     ));
                 }
                 
                 // If no packages are found, show a helpful message
                 if installed_packages.is_empty() {
-                    installed_packages.push(PackageInfo::new(
+                    installed_packages.push(PackageInfo::new_with_type(
                         "no-packages".to_string(),
                         "No packages are currently installed via Homebrew. Use 'brew install <package>' to install packages.".to_string(),
                         "https://brew.sh".to_string(),
                         "1.0.0".to_string(),
+                        None,
+                        PackageType::Unknown,
                         None,
                     ));
                 }
             }
             Err(err) => {
                 // If we can't load packages, provide a detailed error message
-                installed_packages.push(PackageInfo::new(
+                installed_packages.push(PackageInfo::new_with_type(
                     "homebrew-error".to_string(),
                     format!("Error loading packages from Homebrew: {}. Make sure Homebrew is installed and accessible.", err),
                     "https://brew.sh".to_string(),
                     "1.0.0".to_string(),
+                    None,
+                    PackageType::Unknown,
                     None,
                 ));
             }
@@ -208,9 +250,9 @@ impl HomebrewRepository {
                     Ok(package) => {
                         let mut to_cache = Vec::new();
                         
-                        // Look for matching formula
+                        // Look for matching formulae
                         for formula in &package.formulae {
-                            let pkg_info = brew_formula_to_package_info(formula);
+                            let pkg_info = brew_formulae_to_package_info(formula);
                             to_cache.push((formula.name.clone(), pkg_info));
                         }
                         
@@ -438,8 +480,8 @@ impl PackageRepository for HomebrewRepository {
     }
 }
 
-/// Convert a brew Formula JSON to our PackageInfo structure
-fn brew_formula_to_package_info(formula: &BrewFormula) -> PackageInfo {
+/// Convert a brew Formulae JSON to our PackageInfo structure
+fn brew_formulae_to_package_info(formula: &BrewFormula) -> PackageInfo {
     let installed_version = if !formula.installed.is_empty() {
         Some(formula.installed[0].version.clone())
     } else {
@@ -452,7 +494,7 @@ fn brew_formula_to_package_info(formula: &BrewFormula) -> PackageInfo {
         formula.homepage.clone(),
         formula.versions.stable.clone().unwrap_or_else(|| "unknown".to_string()),
         installed_version,
-        PackageType::Formula,
+        PackageType::Formulae,
         Some(formula.tap.clone()),
     )
 }

@@ -10,12 +10,13 @@ pub struct PackageInfo {
     pub installed_version: Option<String>,
     pub package_type: PackageType,
     pub tap: Option<String>,
+    pub outdated: bool,
 }
 
 /// Represents the type of a Homebrew package
 #[derive(Debug, Clone, PartialEq)]
 pub enum PackageType {
-    Formula,
+    Formulae,
     Cask,
     Unknown,
 }
@@ -74,11 +75,12 @@ pub struct BrewInstalled {
 
 #[derive(Debug, Deserialize)]
 pub struct BrewDependency {
-    pub full_name: String,
-    pub version: String,
-    pub revision: u32,
-    pub pkg_version: String,
-    pub declared_directly: bool,
+    pub full_name: Option<String>,
+    pub version: Option<String>,
+    pub revision: Option<u32>,
+    pub bottle_rebuild: Option<u32>,
+    pub pkg_version: Option<String>,
+    pub declared_directly: Option<bool>,
 }
 
 impl PackageInfo {
@@ -98,6 +100,7 @@ impl PackageInfo {
             installed_version,
             package_type: PackageType::Unknown,
             tap: None,
+            outdated: false,
         }
     }
 
@@ -119,6 +122,30 @@ impl PackageInfo {
             installed_version,
             package_type,
             tap,
+            outdated: false,
+        }
+    }
+
+    /// Creates a new PackageInfo instance with full information including outdated status
+    pub fn new_with_full_info(
+        name: String,
+        description: String,
+        homepage: String,
+        current_version: String,
+        installed_version: Option<String>,
+        package_type: PackageType,
+        tap: Option<String>,
+        outdated: bool,
+    ) -> Self {
+        Self {
+            name,
+            description,
+            homepage,
+            current_version,
+            installed_version,
+            package_type,
+            tap,
+            outdated,
         }
     }
 
@@ -149,20 +176,20 @@ impl PackageInfo {
         }
     }
 
-    /// Gets the display name with appropriate emoji based on package type
+    /// Gets the display name with package type prefix
     pub fn get_display_name(&self) -> String {
         match self.package_type {
-            PackageType::Formula => format!("📦 {}", self.name),
-            PackageType::Cask => format!("🖥️ {}", self.name),
+            PackageType::Formulae => format!("⚙️ {}", self.name),
+            PackageType::Cask => format!("🍺 {}", self.name),
             PackageType::Unknown => self.name.clone(),
         }
     }
 
-    /// Gets the package type emoji
+    /// Gets an emoji representing the package type
     pub fn get_type_emoji(&self) -> &'static str {
         match self.package_type {
-            PackageType::Formula => "📦",
-            PackageType::Cask => "🖥️",
+            PackageType::Formulae => "⚙️",
+            PackageType::Cask => "🍺",
             PackageType::Unknown => "❓",
         }
     }
