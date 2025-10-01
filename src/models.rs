@@ -1,4 +1,55 @@
 use serde::Deserialize;
+use std::cmp::Ordering;
+
+/// Compare two Homebrew version strings, considering revision suffixes (_X)
+/// Returns Ordering::Less if a < b, Ordering::Equal if a == b, Ordering::Greater if a > b
+fn compare_homebrew_versions(a: &str, b: &str) -> Ordering {
+    // Split version and revision parts
+    let (a_base, a_rev) = split_version_revision(a);
+    let (b_base, b_rev) = split_version_revision(b);
+    
+    // First compare base versions
+    let base_cmp = compare_version_strings(&a_base, &b_base);
+    if base_cmp != Ordering::Equal {
+        return base_cmp;
+    }
+    
+    // If base versions are equal, compare revision numbers
+    a_rev.cmp(&b_rev)
+}
+
+/// Split a version string into base version and revision number
+/// e.g., "76.1_2" -> ("76.1", 2), "3.2.4" -> ("3.2.4", 0)
+fn split_version_revision(version: &str) -> (String, u32) {
+    if let Some(underscore_pos) = version.rfind('_') {
+        let base = version[..underscore_pos].to_string();
+        let revision_str = &version[underscore_pos + 1..];
+        let revision = revision_str.parse::<u32>().unwrap_or(0);
+        (base, revision)
+    } else {
+        (version.to_string(), 0)
+    }
+}
+
+/// Compare two version strings numerically (e.g., "3.2.4" vs "3.10.1")
+fn compare_version_strings(a: &str, b: &str) -> Ordering {
+    let a_parts: Vec<u32> = a.split('.').filter_map(|s| s.parse().ok()).collect();
+    let b_parts: Vec<u32> = b.split('.').filter_map(|s| s.parse().ok()).collect();
+    
+    let max_len = a_parts.len().max(b_parts.len());
+    
+    for i in 0..max_len {
+        let a_part = a_parts.get(i).unwrap_or(&0);
+        let b_part = b_parts.get(i).unwrap_or(&0);
+        
+        match a_part.cmp(b_part) {
+            Ordering::Equal => continue,
+            other => return other,
+        }
+    }
+    
+    Ordering::Equal
+}
 
 /// Represents a Homebrew package with its metadata
 #[derive(Debug, Clone)]
@@ -157,7 +208,13 @@ impl PackageInfo {
     /// Checks if the package has an update available
     pub fn has_update_available(&self) -> bool {
         match &self.installed_version {
-            Some(installed) => installed != &self.current_version,
+            Some(installed) => {
+                // Use version comparison that understands revisions
+                match compare_homebrew_versions(installed, &self.current_version) {
+                    Ordering::Less => true,  // installed < current, update available
+                    Ordering::Equal | Ordering::Greater => false,  // installed >= current, no update needed
+                }
+            }
             None => false,
         }
     }
@@ -192,5 +249,52 @@ impl PackageInfo {
             PackageType::Cask => "🍺",
             PackageType::Unknown => "❓",
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_has_update_available_with_revisions() {
+        // Case 1: Installed version 3.2.4_4 is newer than stable 3.2.4 - no update needed
+        let package1 = PackageInfo {
+            name: "httpie".to_string(),
+            description: "HTTP client".to_string(),
+            homepage: "https://httpie.io".to_string(),
+            current_version: "3.2.4".to_string(),
+            installed_version: Some("3.2.4_4".to_string()),
+            package_type: PackageType::Formulae,
+            tap: None,
+            outdated: false,
+        };
+        assert_eq!(package1.has_update_available(), false);
+
+        // Case 2: Installed version 3.2.4 is older than stable 3.2.5 - update available
+        let package2 = PackageInfo {
+            name: "httpie".to_string(),
+            description: "HTTP client".to_string(),
+            homepage: "https://httpie.io".to_string(),
+            current_version: "3.2.5".to_string(),
+            installed_version: Some("3.2.4".to_string()),
+            package_type: PackageType::Formulae,
+            tap: None,
+            outdated: false,
+        };
+        assert_eq!(package2.has_update_available(), true);
+
+        // Case 3: Installed version 76.1 is older than stable 76.1_2 - update available
+        let package3 = PackageInfo {
+            name: "somepackage".to_string(),
+            description: "Some package".to_string(),
+            homepage: "https://example.com".to_string(),
+            current_version: "76.1_2".to_string(),
+            installed_version: Some("76.1".to_string()),
+            package_type: PackageType::Formulae,
+            tap: None,
+            outdated: false,
+        };
+        assert_eq!(package3.has_update_available(), true);
     }
 }

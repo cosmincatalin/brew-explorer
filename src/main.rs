@@ -138,6 +138,9 @@ fn run_app<B: Backend>(terminal: &mut Terminal<B>, app: &mut App) -> Result<()> 
             // Update package details from background loading
             app.update_package_details();
             
+            // Update mock update progress
+            app.update_mock_progress();
+            
             last_tick = Instant::now();
         }
         

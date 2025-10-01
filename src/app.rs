@@ -5,6 +5,30 @@ use ratatui::widgets::ListState;
 use std::collections::VecDeque;
 use std::time::{Duration, Instant};
 
+/// Mock update stages for UX testing
+#[derive(Debug, Clone, PartialEq)]
+pub enum UpdateStage {
+    Idle,
+    Starting,
+    Downloading,
+    Installing,
+    Completing,
+    Finished,
+    // Uninstall stages
+    UninstallStarting,
+    UninstallRemoving,
+    UninstallCleaning,
+    UninstallFinished,
+}
+
+/// Modal state for the application
+#[derive(Debug, Clone, PartialEq)]
+pub enum ModalState {
+    None,
+    UpdateProgress,
+    UninstallConfirmation,
+}
+
 /// Application state and business logic
 pub struct App {
     pub items: Vec<PackageInfo>,
@@ -20,6 +44,16 @@ pub struct App {
     // Multi-column layout state
     pub current_columns: usize,
     pub rows_per_column: usize,
+    // Mock update state
+    pub is_updating: bool,
+    pub update_package_name: Option<String>,
+    pub update_start_time: Option<Instant>,
+    pub update_stage: UpdateStage,
+    pub is_uninstalling: bool, // Track if this is an uninstall operation
+    pub real_update_called: bool, // Track if real update has been called
+    pub pending_uninstall_package: Option<String>, // Package pending uninstall confirmation
+    // Modal state
+    pub modal_state: ModalState,
 }
 
 impl App {
@@ -39,6 +73,14 @@ impl App {
             repository,
             current_columns: 1,
             rows_per_column: 0,
+            is_updating: false,
+            update_package_name: None,
+            update_start_time: None,
+            update_stage: UpdateStage::Idle,
+            is_uninstalling: false,
+            real_update_called: false,
+            pending_uninstall_package: None,
+            modal_state: ModalState::None,
         };
         app.list_state.select(Some(0));
         Ok(app)
@@ -449,23 +491,237 @@ impl App {
     /// Uninstalls the currently selected package
     pub fn uninstall_selected_package(&mut self) -> Result<()> {
         if let Some(package) = self.get_selected_package() {
-            if package.is_installed() {
-                self.repository.uninstall_package(&package.name)?;
-                self.refresh_packages()?;
+            if package.is_installed() && !self.is_updating {
+                // Show confirmation modal instead of immediately uninstalling
+                self.pending_uninstall_package = Some(package.name.clone());
+                self.modal_state = ModalState::UninstallConfirmation;
+            } else if !package.is_installed() {
+                self.add_status_message(format!("{} is not installed", package.name));
+            } else if self.is_updating {
+                self.add_status_message("Another operation is currently in progress".to_string());
             }
         }
         Ok(())
     }
 
-    /// Updates the currently selected package
+    /// Updates the currently selected package (mock implementation for UX testing)
     pub fn update_selected_package(&mut self) -> Result<()> {
         if let Some(package) = self.get_selected_package() {
-            if package.has_update_available() {
-                self.repository.update_package(&package.name)?;
-                self.refresh_packages()?;
+            if package.has_update_available() && !self.is_updating {
+                // Start mock update process
+                self.start_mock_update(package.name.clone());
+            } else if !package.has_update_available() {
+                self.add_status_message(format!("{} is already up to date", package.name));
+            } else if self.is_updating {
+                self.add_status_message("Another package is currently being updated".to_string());
             }
         }
         Ok(())
+    }
+
+    /// Starts a mock update process
+    fn start_mock_update(&mut self, package_name: String) {
+        // Start the UI mock progression immediately for better UX
+        self.is_updating = true;
+        self.update_package_name = Some(package_name.clone());
+        self.update_start_time = Some(Instant::now());
+        self.update_stage = UpdateStage::Starting;
+        self.real_update_called = false;
+        self.modal_state = ModalState::UpdateProgress;
+        self.add_status_message(format!("Starting update for {}", package_name));
+        
+        // The real update will be called during the "Installing" stage
+        // to better simulate the actual timing of when brew upgrade runs
+    }
+
+    /// Starts a mock uninstall process
+    fn start_mock_uninstall(&mut self, package_name: String) {
+        // Start the UI mock progression immediately for better UX
+        self.is_updating = true;
+        self.is_uninstalling = true;
+        self.update_package_name = Some(package_name.clone());
+        self.update_start_time = Some(Instant::now());
+        self.update_stage = UpdateStage::UninstallStarting;
+        self.real_update_called = false; // Track if real uninstall has been called
+        self.modal_state = ModalState::UpdateProgress;
+        self.add_status_message(format!("Starting uninstall for {}", package_name));
+        
+        // The real uninstall will be called during the "UninstallRemoving" stage
+    }
+
+    /// Updates the mock update progress (call this regularly to simulate progress)
+    pub fn update_mock_progress(&mut self) {
+        if !self.is_updating {
+            return;
+        }
+
+        let elapsed = self.update_start_time
+            .map(|start| start.elapsed())
+            .unwrap_or_default();
+
+        let package_name = self.update_package_name.as_ref().unwrap();
+
+        match self.update_stage {
+            UpdateStage::Starting if elapsed > Duration::from_millis(800) => {
+                self.update_stage = UpdateStage::Downloading;
+                self.add_status_message(format!("Downloading {} updates...", package_name));
+            }
+            UpdateStage::Downloading if elapsed > Duration::from_millis(2500) => {
+                self.update_stage = UpdateStage::Installing;
+                self.add_status_message(format!("Installing {} updates...", package_name));
+            }
+            UpdateStage::Installing if elapsed > Duration::from_millis(4000) => {
+                // Call real update during Installing stage if not called yet
+                if !self.real_update_called && !self.is_uninstalling {
+                    if let Err(e) = self.repository.update_package(package_name) {
+                        self.add_status_message(format!("❌ Failed to update {}: {}", package_name, e));
+                        self.finish_mock_update();
+                        return;
+                    }
+                    self.real_update_called = true;
+                }
+                
+                self.update_stage = UpdateStage::Completing;
+                self.add_status_message(format!("Completing {} installation...", package_name));
+            }
+            UpdateStage::Completing if elapsed > Duration::from_millis(5000) => {
+                self.update_stage = UpdateStage::Finished;
+                self.add_status_message(format!("✅ {} updated successfully!", package_name));
+            }
+            UpdateStage::Finished if elapsed > Duration::from_millis(6000) => {
+                // Reset update state
+                self.finish_mock_update();
+            }
+            // Uninstall stages
+            UpdateStage::UninstallStarting if elapsed > Duration::from_millis(500) => {
+                self.update_stage = UpdateStage::UninstallRemoving;
+                self.add_status_message(format!("Removing {} files...", package_name));
+            }
+            UpdateStage::UninstallRemoving if elapsed > Duration::from_millis(2000) => {
+                // Call real uninstall during UninstallRemoving stage if not called yet
+                if !self.real_update_called && self.is_uninstalling {
+                    if let Err(e) = self.repository.uninstall_package(package_name) {
+                        self.add_status_message(format!("❌ Failed to uninstall {}: {}", package_name, e));
+                        self.finish_mock_uninstall();
+                        return;
+                    }
+                    self.real_update_called = true;
+                }
+                
+                self.update_stage = UpdateStage::UninstallCleaning;
+                self.add_status_message(format!("Cleaning up {} dependencies...", package_name));
+            }
+            UpdateStage::UninstallCleaning if elapsed > Duration::from_millis(3500) => {
+                self.update_stage = UpdateStage::UninstallFinished;
+                self.add_status_message(format!("✅ {} uninstalled successfully!", package_name));
+            }
+            UpdateStage::UninstallFinished if elapsed > Duration::from_millis(4500) => {
+                // Reset uninstall state and remove from list
+                self.finish_mock_uninstall();
+            }
+            _ => {}
+        }
+    }
+
+    /// Finishes the mock uninstall and removes package from list
+    fn finish_mock_uninstall(&mut self) {
+        let package_name = self.update_package_name.clone();
+        
+        self.is_updating = false;
+        self.is_uninstalling = false;
+        self.real_update_called = false;
+        self.update_package_name = None;
+        self.update_start_time = None;
+        self.update_stage = UpdateStage::Idle;
+        self.modal_state = ModalState::None;
+        
+        // Remove package from list after uninstall
+        if let Some(name) = package_name {
+            // Clear the package from repository cache to prevent reappearance
+            self.repository.clear_package_cache(&name);
+            
+            // Remove from our package lists immediately since uninstall was successful
+            self.items.retain(|p| p.name != name);
+            if self.is_searching {
+                self.filtered_items.retain(|p| p.name != name);
+            }
+            
+            // Adjust selection if needed
+            let max_index = if self.is_searching {
+                self.filtered_items.len()
+            } else {
+                self.items.len()
+            };
+            
+            if max_index == 0 {
+                self.list_state.select(None);
+            } else if let Some(selected) = self.list_state.selected() {
+                if selected >= max_index {
+                    self.list_state.select(Some(max_index - 1));
+                }
+            }
+            
+            self.add_status_message(format!("✅ Successfully uninstalled {}", name));
+        }
+    }
+
+    /// Finishes the mock update and resets state
+    fn finish_mock_update(&mut self) {
+        let package_name = self.update_package_name.clone();
+        
+        self.is_updating = false;
+        self.is_uninstalling = false;
+        self.real_update_called = false;
+        self.update_package_name = None;
+        self.update_start_time = None;
+        self.update_stage = UpdateStage::Idle;
+        self.modal_state = ModalState::None;
+        
+        // Refresh only the updated package's metadata after a small delay
+        if let Some(name) = package_name {
+            // Add a small delay to ensure brew has updated its internal state
+            std::thread::sleep(std::time::Duration::from_millis(500));
+            
+            if let Err(e) = self.refresh_single_package(name.clone()) {
+                self.add_status_message(format!("⚠️  Failed to refresh {}: {}", name, e));
+            }
+        }
+    }
+
+    /// Gets the current update status message for display
+    pub fn get_update_status(&self) -> Option<String> {
+        if !self.is_updating {
+            return None;
+        }
+
+        let package_name = self.update_package_name.as_ref()?;
+        let elapsed = self.update_start_time?.elapsed();
+
+        match self.update_stage {
+            UpdateStage::Starting => Some(format!("🔄 Preparing to update {}...", package_name)),
+            UpdateStage::Downloading => {
+                let dots = ".".repeat(((elapsed.as_millis() / 300) % 4) as usize);
+                Some(format!("⬇️  Downloading {} updates{}", package_name, dots))
+            }
+            UpdateStage::Installing => {
+                let dots = ".".repeat(((elapsed.as_millis() / 200) % 4) as usize);
+                Some(format!("🔧 Installing {} updates{}", package_name, dots))
+            }
+            UpdateStage::Completing => Some(format!("✨ Finalizing {} installation...", package_name)),
+            UpdateStage::Finished => Some(format!("✅ {} updated successfully!", package_name)),
+            // Uninstall status messages
+            UpdateStage::UninstallStarting => Some(format!("🗑️  Preparing to uninstall {}...", package_name)),
+            UpdateStage::UninstallRemoving => {
+                let dots = ".".repeat(((elapsed.as_millis() / 200) % 4) as usize);
+                Some(format!("🗂️  Removing {} files{}", package_name, dots))
+            }
+            UpdateStage::UninstallCleaning => {
+                let dots = ".".repeat(((elapsed.as_millis() / 300) % 4) as usize);
+                Some(format!("🧹 Cleaning up {} dependencies{}", package_name, dots))
+            }
+            UpdateStage::UninstallFinished => Some(format!("✅ {} uninstalled successfully!", package_name)),
+            UpdateStage::Idle => None,
+        }
     }
 
     /// Sets the quit flag
@@ -532,6 +788,60 @@ impl App {
             }
         }
         
+        Ok(())
+    }
+
+    /// Closes any open modal
+    pub fn close_modal(&mut self) {
+        self.modal_state = ModalState::None;
+        self.pending_uninstall_package = None;
+    }
+
+    /// Confirms the uninstall operation
+    pub fn confirm_uninstall(&mut self) {
+        if let Some(package_name) = self.pending_uninstall_package.take() {
+            self.modal_state = ModalState::None;
+            self.start_mock_uninstall(package_name);
+        }
+    }
+
+    /// Cancels the uninstall operation
+    pub fn cancel_uninstall(&mut self) {
+        self.pending_uninstall_package = None;
+        self.modal_state = ModalState::None;
+        self.add_status_message("Uninstall cancelled".to_string());
+    }
+
+    /// Refreshes metadata for a single package after update
+    fn refresh_single_package(&mut self, package_name: String) -> Result<()> {
+        match self.repository.refresh_package(&package_name) {
+            Ok(Some(updated_package)) => {
+                // Update the package in our main list
+                if let Some(index) = self.items.iter().position(|p| p.name == package_name) {
+                    self.items[index] = updated_package.clone();
+                }
+                
+                // Update the package in filtered list if we're searching
+                if self.is_searching {
+                    if let Some(index) = self.filtered_items.iter().position(|p| p.name == package_name) {
+                        self.filtered_items[index] = updated_package;
+                    }
+                }
+                
+                self.add_status_message(format!("📦 Refreshed metadata for {}", package_name));
+            }
+            Ok(None) => {
+                // Package not found (maybe uninstalled)
+                self.items.retain(|p| p.name != package_name);
+                if self.is_searching {
+                    self.filtered_items.retain(|p| p.name != package_name);
+                }
+                self.add_status_message(format!("📦 {} no longer found", package_name));
+            }
+            Err(e) => {
+                return Err(e);
+            }
+        }
         Ok(())
     }
 }

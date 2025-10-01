@@ -1,9 +1,9 @@
-use crate::app::App;
+use crate::app::{App, ModalState, UpdateStage};
 use ratatui::{
     layout::{Alignment, Constraint, Direction, Layout, Margin},
     style::{Color, Modifier, Style},
     text::{Line, Span, Text},
-    widgets::{Block, Borders, List, ListItem, Paragraph, Row, Table, Wrap},
+    widgets::{Block, Borders, Clear, Gauge, List, ListItem, Paragraph, Row, Table, Wrap},
     Frame,
 };
 use std::time::Duration;
@@ -106,6 +106,11 @@ pub fn render_ui(f: &mut Frame, app: &mut App) {
     render_package_list(f, app, content_chunks[0]);
     render_package_details(f, app, content_chunks[1]);
     render_status_bar(f, app, main_chunks[1]);
+    
+    // Render modal if one is open
+    if app.modal_state != ModalState::None {
+        render_modal(f, app);
+    }
 }
 
 /// Renders the package list on the left panel with dynamic columns
@@ -194,9 +199,11 @@ fn render_package_list(f: &mut Frame, app: &mut App, area: ratatui::layout::Rect
                     let package = &items[item_idx];
                     let display_name = package.get_display_name();
                     
-                    // Truncate name to fit column width
-                    let truncated_name = if display_name.len() > column_width - 2 {
-                        format!("{}…", &display_name[..column_width.saturating_sub(3)])
+                    // Truncate name to fit column width (Unicode-safe)
+                    let truncated_name = if display_name.chars().count() > column_width - 2 {
+                        let chars: Vec<char> = display_name.chars().collect();
+                        let truncate_at = column_width.saturating_sub(3);
+                        format!("{}…", chars[..truncate_at].iter().collect::<String>())
                     } else {
                         display_name
                     };
@@ -244,7 +251,8 @@ fn get_package_style(package: &crate::models::PackageInfo) -> Style {
 
 /// Applies horizontal scrolling to a package name
 fn apply_horizontal_scroll(name: &str, available_width: usize, app: &App) -> String {
-    let name_len = name.len();
+    let chars: Vec<char> = name.chars().collect();
+    let name_len = chars.len();
 
     if name_len > available_width && app.last_interaction.elapsed() > Duration::from_secs(3) {
         let start = app.scroll_offset % name_len.max(1);
@@ -252,11 +260,11 @@ fn apply_horizontal_scroll(name: &str, available_width: usize, app: &App) -> Str
 
         if start < name_len {
             if end <= name_len {
-                name[start..end].to_string()
+                chars[start..end].iter().collect()
             } else {
                 // Wrap around
-                let first_part = &name[start..];
-                let second_part = &name[..end - name_len];
+                let first_part: String = chars[start..].iter().collect();
+                let second_part: String = chars[..end - name_len].iter().collect();
                 format!("{}{}", first_part, second_part)
             }
         } else {
@@ -342,33 +350,43 @@ fn create_package_details_text(package: &crate::models::PackageInfo) -> Text<'_>
 /// Creates action hints based on package state
 fn create_action_hints(package: &crate::models::PackageInfo) -> Line<'_> {
     if package.is_installed() {
+        // Create action list for installed packages
+        let mut actions = vec![
+            Span::styled("⚡ Actions:", Style::default().add_modifier(Modifier::BOLD).fg(Color::Cyan)),
+            Span::raw("\n"),
+            Span::raw("  "),
+            Span::styled("* ", Style::default().fg(Color::White)),
+            Span::styled("uninstall", Style::default().fg(Color::Red).add_modifier(Modifier::BOLD)),
+            Span::styled(" (press 'x' to remove)", Style::default().fg(Color::Gray)),
+        ];
+        
+        // Only add update action if update is available
         if package.has_update_available() {
-            Line::from(vec![
-                Span::styled("Actions: ", Style::default().add_modifier(Modifier::BOLD)),
-                Span::styled("u", Style::default().fg(Color::Yellow)),
-                Span::raw("pdate, "),
-                Span::styled("x", Style::default().fg(Color::Red)),
-                Span::raw(" uninstall"),
-            ])
-        } else {
-            Line::from(vec![
-                Span::styled("Actions: ", Style::default().add_modifier(Modifier::BOLD)),
-                Span::styled("x", Style::default().fg(Color::Red)),
-                Span::raw(" uninstall"),
-            ])
+            actions.extend(vec![
+                Span::raw("\n"),
+                Span::raw("  "),
+                Span::styled("* ", Style::default().fg(Color::White)),
+                Span::styled("update", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
+                Span::styled(" (press 'u' to update)", Style::default().fg(Color::Gray)),
+            ]);
         }
+        
+        Line::from(actions)
     } else {
         Line::from(vec![
-            Span::styled("Actions: ", Style::default().add_modifier(Modifier::BOLD)),
-            Span::styled("i", Style::default().fg(Color::Green)),
-            Span::raw("nstall"),
+            Span::styled("⚡ Actions:", Style::default().add_modifier(Modifier::BOLD).fg(Color::Cyan)),
+            Span::raw("\n"),
+            Span::raw("  "),
+            Span::styled("* ", Style::default().fg(Color::White)),
+            Span::styled("install", Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)),
+            Span::styled(" (press 'i' to install)", Style::default().fg(Color::Gray)),
         ])
     }
 }
 
 /// Renders help text at the bottom of the details panel
 fn render_help_text(f: &mut Frame, area: ratatui::layout::Rect) {
-    let help_text = "Navigate: ↑/↓ ←/→ or hjkl | Search: / | Actions: i/u/x | Quit: q";
+    let help_text = "Navigate: ↑/↓ ←/→ | Search: / | Actions: i/u/x | Quit: q";
     let help_paragraph = Paragraph::new(help_text).style(Style::default().fg(Color::Gray));
 
     let help_area = area.inner(Margin {
@@ -388,10 +406,13 @@ fn render_help_text(f: &mut Frame, area: ratatui::layout::Rect) {
 
 /// Renders the status bar at the bottom of the screen
 fn render_status_bar(f: &mut Frame, app: &mut App, area: ratatui::layout::Rect) {
-    let status_text = if let Some(message) = app.get_current_status() {
+    let status_text = if let Some(update_status) = app.get_update_status() {
+        // Prioritize update status when an update is in progress
+        update_status
+    } else if let Some(message) = app.get_current_status() {
         message
     } else {
-        "Navigate: ↑/↓ ←/→ hjkl PgUp/PgDn Home/End | Search: / | Actions: i/u/x | Quit: q".to_string()
+        "Navigate: ↑/↓ ←/→ PgUp/PgDn Home/End | Search: / | Actions: i/u/x | Quit: q".to_string()
     };
 
     let status_paragraph = Paragraph::new(status_text)
@@ -399,4 +420,189 @@ fn render_status_bar(f: &mut Frame, app: &mut App, area: ratatui::layout::Rect) 
         .wrap(Wrap { trim: true });
 
     f.render_widget(status_paragraph, area);
+}
+
+/// Renders modal windows
+fn render_modal(f: &mut Frame, app: &App) {
+    match app.modal_state {
+        ModalState::UpdateProgress => render_update_modal(f, app),
+        ModalState::UninstallConfirmation => render_uninstall_confirmation_modal(f, app),
+        ModalState::None => {}
+    }
+}
+
+/// Renders the update progress modal
+fn render_update_modal(f: &mut Frame, app: &App) {
+    let area = f.area();
+    
+    // Create a centered modal area
+    let modal_width = 60;
+    let modal_height = 12;
+    let x = (area.width.saturating_sub(modal_width)) / 2;
+    let y = (area.height.saturating_sub(modal_height)) / 2;
+    
+    let modal_area = ratatui::layout::Rect {
+        x,
+        y,
+        width: modal_width,
+        height: modal_height,
+    };
+    
+    // Clear the area behind the modal
+    f.render_widget(Clear, modal_area);
+    
+    // Get update information
+    let package_name = app.update_package_name.as_deref()
+        .unwrap_or("Unknown Package");
+    let elapsed = app.update_start_time
+        .map(|start| start.elapsed())
+        .unwrap_or_default();
+    
+    // Calculate progress based on stage and timing
+    let (progress, stage_text, details, modal_title) = match app.update_stage {
+        UpdateStage::Idle => (0, "Idle", "No operation in progress", "No Operation"),
+        UpdateStage::Starting => (10, "Starting", "Preparing update process...", "Updating"),
+        UpdateStage::Downloading => {
+            let base_progress = 20;
+            let additional = ((elapsed.as_millis() - 800) / 17).min(40) as u16; // Up to 40% more
+            (base_progress + additional, "Downloading", "Fetching update files...", "Updating")
+        },
+        UpdateStage::Installing => {
+            let base_progress = 60;
+            let additional = ((elapsed.as_millis() - 2500) / 15).min(25) as u16; // Up to 25% more
+            (base_progress + additional, "Installing", "Installing new version...", "Updating")
+        },
+        UpdateStage::Completing => (90, "Completing", "Finalizing installation...", "Updating"),
+        UpdateStage::Finished => (100, "Complete", "Update completed successfully! Closing...", "Updating"),
+        // Uninstall stages
+        UpdateStage::UninstallStarting => (15, "Starting", "Preparing uninstall process...", "Uninstalling"),
+        UpdateStage::UninstallRemoving => {
+            let base_progress = 30;
+            let additional = ((elapsed.as_millis() - 500) / 15).min(40) as u16; // Up to 40% more
+            (base_progress + additional, "Removing", "Removing application files...", "Uninstalling")
+        },
+        UpdateStage::UninstallCleaning => (80, "Cleaning", "Cleaning up dependencies...", "Uninstalling"),
+        UpdateStage::UninstallFinished => (100, "Complete", "Uninstall completed successfully! Closing...", "Uninstalling"),
+    };
+    
+    // Create modal content
+    let title = format!("{} {}", modal_title, package_name);
+    let progress_text = format!("{}% - {}", progress, stage_text);
+    
+    let content = vec![
+        Line::from(""),
+        Line::from(Span::styled(
+            details,
+            Style::default().fg(Color::Cyan)
+        )),
+        Line::from(""),
+        Line::from(progress_text),
+        Line::from(""),
+        Line::from(""),
+        Line::from(Span::styled(
+            if app.is_uninstalling {
+                "Uninstall in progress... Please wait for completion."
+            } else {
+                "Update in progress... Please wait for completion."
+            },
+            Style::default().fg(Color::Yellow).add_modifier(Modifier::ITALIC)
+        )),
+    ];
+    
+    // Create the modal block
+    let modal_block = Block::default()
+        .title(title)
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(Color::Blue))
+        .style(Style::default().bg(Color::Black));
+    
+    // Split modal area for content and progress bar
+    let modal_layout = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Length(content.len() as u16 + 1),
+            Constraint::Length(3),
+        ])
+        .split(modal_block.inner(modal_area));
+    
+    // Render modal background
+    f.render_widget(modal_block, modal_area);
+    
+    // Render content
+    let content_paragraph = Paragraph::new(content)
+        .alignment(Alignment::Center)
+        .wrap(Wrap { trim: true });
+    f.render_widget(content_paragraph, modal_layout[0]);
+    
+    // Render progress bar
+    let progress_gauge = Gauge::default()
+        .block(Block::default().borders(Borders::ALL).title("Progress"))
+        .gauge_style(Style::default().fg(Color::Green))
+        .percent(progress)
+        .label(format!("{}%", progress));
+    f.render_widget(progress_gauge, modal_layout[1]);
+}
+
+/// Renders the uninstall confirmation modal
+fn render_uninstall_confirmation_modal(f: &mut Frame, app: &App) {
+    let area = f.area();
+    
+    // Create a centered modal area
+    let modal_width = 50;
+    let modal_height = 8;
+    let x = (area.width.saturating_sub(modal_width)) / 2;
+    let y = (area.height.saturating_sub(modal_height)) / 2;
+    
+    let modal_area = ratatui::layout::Rect {
+        x,
+        y,
+        width: modal_width,
+        height: modal_height,
+    };
+    
+    // Clear the area behind the modal
+    f.render_widget(Clear, modal_area);
+    
+    // Get package name
+    let package_name = app.pending_uninstall_package.as_deref()
+        .unwrap_or("Unknown Package");
+    
+    // Create modal content
+    let content = vec![
+        Line::from(""),
+        Line::from(Span::styled(
+            format!("Are you sure you want to uninstall '{}'?", package_name),
+            Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)
+        )),
+        Line::from(""),
+        Line::from(Span::styled(
+            "This action cannot be undone.",
+            Style::default().fg(Color::Gray).add_modifier(Modifier::ITALIC)
+        )),
+        Line::from(""),
+        Line::from(vec![
+            Span::styled("Press ", Style::default().fg(Color::Gray)),
+            Span::styled("Y", Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)),
+            Span::styled(" to confirm, ", Style::default().fg(Color::Gray)),
+            Span::styled("N", Style::default().fg(Color::Red).add_modifier(Modifier::BOLD)),
+            Span::styled(" to cancel", Style::default().fg(Color::Gray)),
+        ]),
+    ];
+    
+    // Create the modal block
+    let modal_block = Block::default()
+        .title("⚠️  Confirm Uninstall")
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(Color::Red))
+        .style(Style::default().bg(Color::Black));
+    
+    // Render modal background
+    f.render_widget(modal_block.clone(), modal_area);
+    
+    // Render content
+    let content_paragraph = Paragraph::new(content)
+        .block(modal_block)
+        .alignment(Alignment::Center)
+        .wrap(Wrap { trim: true });
+    f.render_widget(content_paragraph, modal_area);
 }

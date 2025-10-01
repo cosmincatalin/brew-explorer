@@ -1,13 +1,107 @@
 use crate::models::{PackageInfo, PackageType, BrewInfoResponse, BrewFormula, BrewCask};
 use anyhow::Result;
 use std::any::Any;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::time::{Duration, Instant};
 use std::process::Command;
+use std::cmp::Ordering;
 use serde_json;
+
+/// Compare two Homebrew version strings, considering revision suffixes (_X)
+/// Returns Ordering::Less if a < b, Ordering::Equal if a == b, Ordering::Greater if a > b
+fn compare_homebrew_versions(a: &str, b: &str) -> Ordering {
+    // Split version and revision parts
+    let (a_base, a_rev) = split_version_revision(a);
+    let (b_base, b_rev) = split_version_revision(b);
+    
+    // First compare base versions
+    let base_cmp = compare_version_strings(&a_base, &b_base);
+    if base_cmp != Ordering::Equal {
+        return base_cmp;
+    }
+    
+    // If base versions are equal, compare revision numbers
+    a_rev.cmp(&b_rev)
+}
+
+/// Split a version string into base version and revision number
+/// e.g., "76.1_2" -> ("76.1", 2), "3.2.4" -> ("3.2.4", 0)
+fn split_version_revision(version: &str) -> (String, u32) {
+    if let Some(underscore_pos) = version.rfind('_') {
+        let base = version[..underscore_pos].to_string();
+        let revision_str = &version[underscore_pos + 1..];
+        let revision = revision_str.parse::<u32>().unwrap_or(0);
+        (base, revision)
+    } else {
+        (version.to_string(), 0)
+    }
+}
+
+/// Compare two version strings numerically (e.g., "3.2.4" vs "3.10.1")
+fn compare_version_strings(a: &str, b: &str) -> Ordering {
+    let a_parts: Vec<u32> = a.split('.').filter_map(|s| s.parse().ok()).collect();
+    let b_parts: Vec<u32> = b.split('.').filter_map(|s| s.parse().ok()).collect();
+    
+    let max_len = a_parts.len().max(b_parts.len());
+    
+    for i in 0..max_len {
+        let a_part = a_parts.get(i).unwrap_or(&0);
+        let b_part = b_parts.get(i).unwrap_or(&0);
+        
+        match a_part.cmp(b_part) {
+            Ordering::Equal => continue,
+            other => return other,
+        }
+    }
+    
+    Ordering::Equal
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_compare_homebrew_versions_with_revisions() {
+        // Test revision comparison
+        assert_eq!(compare_homebrew_versions("76.1", "76.1_2"), Ordering::Less);
+        assert_eq!(compare_homebrew_versions("76.1_2", "76.1"), Ordering::Greater);
+        assert_eq!(compare_homebrew_versions("3.2.4", "3.2.4_4"), Ordering::Less);
+        assert_eq!(compare_homebrew_versions("3.2.4_4", "3.2.4"), Ordering::Greater);
+        
+        // Test equal versions
+        assert_eq!(compare_homebrew_versions("76.1", "76.1"), Ordering::Equal);
+        assert_eq!(compare_homebrew_versions("76.1_2", "76.1_2"), Ordering::Equal);
+        
+        // Test different base versions
+        assert_eq!(compare_homebrew_versions("76.1", "76.2"), Ordering::Less);
+        assert_eq!(compare_homebrew_versions("76.2", "76.1"), Ordering::Greater);
+        
+        // Test mixed scenarios
+        assert_eq!(compare_homebrew_versions("76.1_5", "76.2"), Ordering::Less);
+        assert_eq!(compare_homebrew_versions("76.2", "76.1_5"), Ordering::Greater);
+    }
+
+    #[test]
+    fn test_split_version_revision() {
+        assert_eq!(split_version_revision("76.1"), ("76.1".to_string(), 0));
+        assert_eq!(split_version_revision("76.1_2"), ("76.1".to_string(), 2));
+        assert_eq!(split_version_revision("3.2.4_4"), ("3.2.4".to_string(), 4));
+        assert_eq!(split_version_revision("1.0.0"), ("1.0.0".to_string(), 0));
+    }
+
+    #[test]
+    fn test_compare_version_strings() {
+        assert_eq!(compare_version_strings("3.2.4", "3.2.4"), Ordering::Equal);
+        assert_eq!(compare_version_strings("3.2.3", "3.2.4"), Ordering::Less);
+        assert_eq!(compare_version_strings("3.2.4", "3.2.3"), Ordering::Greater);
+        assert_eq!(compare_version_strings("3.10.1", "3.2.4"), Ordering::Greater);
+        assert_eq!(compare_version_strings("3.2.4", "3.10.1"), Ordering::Less);
+    }
+}
 
 /// Trait for package repository operations
 pub trait PackageRepository: Any + Send + Sync {
@@ -16,6 +110,8 @@ pub trait PackageRepository: Any + Send + Sync {
     fn install_package(&self, package_name: &str) -> Result<()>;
     fn uninstall_package(&self, package_name: &str) -> Result<()>;
     fn update_package(&self, package_name: &str) -> Result<()>;
+    fn refresh_package(&self, package_name: &str) -> Result<Option<PackageInfo>>;
+    fn clear_package_cache(&self, package_name: &str);
     
     /// Allows downcasting to concrete types
     fn as_any(&self) -> &dyn Any;
@@ -38,6 +134,7 @@ pub struct HomebrewRepository {
     pending_requests: Arc<Mutex<HashMap<String, Instant>>>, // Track pending requests
     loading_animation_state: Arc<Mutex<usize>>, // For animated loading dots
     last_animation_update: Arc<Mutex<Instant>>, // Track last animation update
+    uninstalled_packages: Arc<Mutex<HashMap<String, Instant>>>, // Track recently uninstalled packages
 }
 
 /// Helper functions for calling brew commands
@@ -107,7 +204,17 @@ impl HomebrewRepository {
                         continue;
                     }
                     
-                    let installed_version = formula.installed.first()
+                    let installed_version = formula.installed
+                        .iter()
+                        .max_by(|a, b| {
+                            // First compare by timestamp
+                            let time_cmp = a.time.cmp(&b.time);
+                            if time_cmp != std::cmp::Ordering::Equal {
+                                return time_cmp;
+                            }
+                            // If timestamps are equal, compare versions (considering _X revisions)
+                            compare_homebrew_versions(&a.version, &b.version)
+                        })
                         .map(|inst| inst.version.clone());
                     let current_version = formula.versions.stable
                         .unwrap_or_else(|| formula.versions.head.unwrap_or_else(|| "unknown".to_string()));
@@ -180,6 +287,7 @@ impl HomebrewRepository {
             pending_requests,
             loading_animation_state,
             last_animation_update,
+            uninstalled_packages: Arc::new(Mutex::new(HashMap::new())),
         }
     }
     
@@ -396,8 +504,29 @@ impl HomebrewRepository {
 
 impl PackageRepository for HomebrewRepository {
     fn get_all_packages(&self) -> Result<Vec<PackageInfo>> {
-        // Return the pre-loaded installed packages immediately
-        Ok(self.installed_packages.clone())
+        let now = Instant::now();
+        
+        // Clean up old uninstalled packages (older than 30 seconds)
+        if let Ok(mut uninstalled) = self.uninstalled_packages.lock() {
+            uninstalled.retain(|_, timestamp| {
+                now.duration_since(*timestamp) < Duration::from_secs(30)
+            });
+        }
+        
+        // Filter out recently uninstalled packages
+        let blacklisted_packages: HashSet<String> = if let Ok(uninstalled) = self.uninstalled_packages.lock() {
+            uninstalled.keys().cloned().collect()
+        } else {
+            HashSet::new()
+        };
+        
+        let filtered_packages: Vec<PackageInfo> = self.installed_packages
+            .iter()
+            .filter(|pkg| !blacklisted_packages.contains(&pkg.name))
+            .cloned()
+            .collect();
+        
+        Ok(filtered_packages)
     }
 
 
@@ -473,6 +602,108 @@ impl PackageRepository for HomebrewRepository {
         }
         
         Ok(())
+    }
+
+    fn refresh_package(&self, package_name: &str) -> Result<Option<PackageInfo>> {
+        // Get fresh information for a specific package
+        let output = Command::new("brew")
+            .args(&["info", "--json=v2", package_name])
+            .output()?;
+        
+        if !output.status.success() {
+            let error_msg = String::from_utf8_lossy(&output.stderr);
+            return Err(anyhow::anyhow!("Failed to get info for {}: {}", package_name, error_msg));
+        }
+        
+        let json_str = String::from_utf8_lossy(&output.stdout);
+        let brew_response: BrewInfoResponse = serde_json::from_str(&json_str)?;
+        
+        // Process formulae
+        for formula in brew_response.formulae {
+            if formula.name == package_name {
+                // Check if this formulae was installed directly
+                let is_directly_installed = formula.installed.iter().any(|install_info| {
+                    install_info.installed_on_request || !install_info.installed_as_dependency
+                });
+                
+                if !is_directly_installed {
+                    return Ok(None); // Not a direct installation
+                }
+                
+                let installed_version = formula.installed
+                    .iter()
+                    .max_by(|a, b| {
+                        // First compare by timestamp
+                        let time_cmp = a.time.cmp(&b.time);
+                        if time_cmp != std::cmp::Ordering::Equal {
+                            return time_cmp;
+                        }
+                        // If timestamps are equal, compare versions (considering _X revisions)
+                        compare_homebrew_versions(&a.version, &b.version)
+                    })
+                    .map(|inst| inst.version.clone());
+                let current_version = formula.versions.stable
+                    .unwrap_or_else(|| formula.versions.head.unwrap_or_else(|| "unknown".to_string()));
+                
+                let package_info = PackageInfo::new_with_full_info(
+                    formula.name.clone(),
+                    formula.desc,
+                    formula.homepage,
+                    current_version,
+                    installed_version,
+                    PackageType::Formulae,
+                    Some(formula.tap),
+                    formula.outdated,
+                );
+                
+                return Ok(Some(package_info));
+            }
+        }
+        
+        // Process casks
+        for cask in brew_response.casks {
+            if cask.token == package_name {
+                let display_name = cask.name.first()
+                    .unwrap_or(&cask.token)
+                    .clone();
+                let description = cask.desc
+                    .unwrap_or_else(|| format!("{} (Cask application)", display_name));
+                
+                let package_info = PackageInfo::new_with_full_info(
+                    cask.token,
+                    description,
+                    cask.homepage,
+                    cask.version.clone(),
+                    cask.installed.clone(),
+                    PackageType::Cask,
+                    Some(cask.tap),
+                    cask.outdated,
+                );
+                
+                return Ok(Some(package_info));
+            }
+        }
+        
+        Ok(None) // Package not found
+    }
+
+    fn clear_package_cache(&self, package_name: &str) {
+        let now = Instant::now();
+        
+        // Remove package from cache
+        if let Ok(mut cache) = self.cache.lock() {
+            cache.remove(package_name);
+        }
+        
+        // Remove from pending requests
+        if let Ok(mut pending) = self.pending_requests.lock() {
+            pending.remove(package_name);
+        }
+        
+        // Add to uninstalled blacklist to prevent re-adding for 30 seconds
+        if let Ok(mut uninstalled) = self.uninstalled_packages.lock() {
+            uninstalled.insert(package_name.to_string(), now);
+        }
     }
     
     fn as_any(&self) -> &dyn Any {
