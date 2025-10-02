@@ -1,25 +1,26 @@
 mod app;
 mod events;
-mod models;
+mod helpers;
 mod repository;
 mod ui;
+mod entities;
 
 use anyhow::Result;
 use app::App;
 use crossterm::{
-    event::{self, DisableMouseCapture, EnableMouseCapture, Event, KeyEventKind, poll},
+    event::{self, poll, DisableMouseCapture, EnableMouseCapture, Event, KeyEventKind},
     execute,
-    terminal::{EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode},
+    terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
 };
 use events::handle_key_event;
-use ratatui::{Terminal, backend::CrosstermBackend, prelude::Backend};
+use ratatui::{backend::CrosstermBackend, prelude::Backend, Terminal};
 use repository::HomebrewRepository;
 use std::{
     io,
     thread,
     time::{Duration, Instant},
 };
-use ui::{render_ui, render_loading_screen};
+use ui::{render_loading_screen, render_ui};
 
 fn main() -> Result<()> {
     // Setup terminal
@@ -37,7 +38,7 @@ fn main() -> Result<()> {
     // Create repository and app in a separate thread to show real loading progress
     let (tx, rx) = std::sync::mpsc::channel();
     thread::spawn(move || {
-        let repository = Box::new(HomebrewRepository::new());
+        let repository = HomebrewRepository::new();
         let app = App::new(repository);
         tx.send(app).unwrap();
     });

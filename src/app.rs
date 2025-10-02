@@ -1,5 +1,5 @@
-use crate::models::PackageInfo;
-use crate::repository::PackageRepository;
+use crate::entities::package_info::PackageInfo;
+use crate::repository::HomebrewRepository;
 use anyhow::Result;
 use ratatui::widgets::ListState;
 use std::collections::VecDeque;
@@ -41,7 +41,7 @@ pub struct App {
     pub is_searching: bool,
     pub pre_search_selection: Option<usize>, // Track selection before search started
     pub status_messages: VecDeque<(String, Instant)>,
-    repository: Box<dyn PackageRepository>,
+    repository: HomebrewRepository,
     // Multi-column layout state
     pub current_columns: usize,
     pub rows_per_column: usize,
@@ -60,7 +60,7 @@ pub struct App {
 
 impl App {
     /// Creates a new application instance
-    pub fn new(repository: Box<dyn PackageRepository>) -> Result<Self> {
+    pub fn new(repository: HomebrewRepository) -> Result<Self> {
         let items = repository.get_all_packages()?;
         let mut app = Self {
             filtered_items: items.clone(),
@@ -110,13 +110,7 @@ impl App {
     
     /// Gets status from repository if available
     fn get_repository_status(&self) -> Option<String> {
-        // This is a bit hacky, but we need to downcast to HomebrewRepository
-        // In a real application, you might want to add status methods to the trait
-        if let Some(homebrew_repo) = self.repository.as_any().downcast_ref::<crate::repository::HomebrewRepository>() {
-            homebrew_repo.get_current_status()
-        } else {
-            None
-        }
+        self.repository.get_current_status()
     }
 
     /// Moves to the next item in the list
@@ -413,43 +407,40 @@ impl App {
     /// Update package details from cache if available (for background loading)
     pub fn update_package_details(&mut self) {
         // Check for loading animation updates
-        if let Some(homebrew_repo) = self.repository.as_any().downcast_ref::<crate::repository::HomebrewRepository>() {
-            if homebrew_repo.update_loading_animations() {
-                // Animation state changed, we might want to refresh if showing loading text
-                // The UI will automatically get the updated text when it calls get_selected_package_details
-            }
-            
-            // Update package types in the main list when details become available
-            let mut list_updated = false;
-            let current_selection = self.list_state.selected(); // Save current selection
-            
-            for package in &mut self.items {
-                if package.package_type == crate::models::PackageType::Unknown
-                    && let Some(detailed_package) = homebrew_repo.get_cached_details(&package.name) {
-                        package.package_type = detailed_package.package_type.clone();
-                        package.tap = detailed_package.tap.clone();
-                        list_updated = true;
-                    }
-            }
-            
-            // Update filtered items if the main list was updated, but preserve selection
-            if list_updated {
-                self.apply_filter();
-                // Restore the selection after filtering
-                if let Some(selected_index) = current_selection
-                    && selected_index < self.filtered_items.len() {
-                        self.list_state.select(Some(selected_index));
-                    }
-            }
+        if self.repository.update_loading_animations() {
+            // Animation state changed, we might want to refresh if showing loading text
+            // The UI will automatically get the updated text when it calls get_selected_package_details
+        }
+
+        // Update package types in the main list when details become available
+        let mut list_updated = false;
+        let current_selection = self.list_state.selected(); // Save current selection
+
+        for package in &mut self.items {
+            if package.package_type == crate::entities::package_info::PackageType::Unknown
+                && let Some(detailed_package) = self.repository.get_cached_details(&package.name) {
+                    package.package_type = detailed_package.package_type.clone();
+                    package.tap = detailed_package.tap.clone();
+                    list_updated = true;
+                }
+        }
+
+        // Update filtered items if the main list was updated, but preserve selection
+        if list_updated {
+            self.apply_filter();
+            // Restore the selection after filtering
+            if let Some(selected_index) = current_selection
+                && selected_index < self.filtered_items.len() {
+                    self.list_state.select(Some(selected_index));
+                }
         }
         
         if let Some(selected_package) = self.get_selected_package() {
             // Check if there are updated details available
-            if let Some(homebrew_repo) = self.repository.as_any().downcast_ref::<crate::repository::HomebrewRepository>()
-                && homebrew_repo.has_updated_details(&selected_package.name)
-                    && let Some(_updated_details) = homebrew_repo.get_cached_details(&selected_package.name) {
-                        // Details have been updated - no need to do anything as they're already cached
-                    }
+            if self.repository.has_updated_details(&selected_package.name)
+                && let Some(_updated_details) = self.repository.get_cached_details(&selected_package.name) {
+                    // Details have been updated - no need to do anything as they're already cached
+                }
         }
     }
 
@@ -535,13 +526,11 @@ impl App {
     /// Uninstalls the currently selected package
     pub fn uninstall_selected_package(&mut self) -> Result<()> {
         if let Some(package) = self.get_selected_package() {
-            if package.is_installed() && !self.is_updating {
+            if !self.is_updating {
                 // Show confirmation modal instead of immediately uninstalling
                 self.pending_uninstall_package = Some(package.name.clone());
                 self.modal_state = ModalState::UninstallConfirmation;
-            } else if !package.is_installed() {
-                self.add_status_message(format!("{} is not installed", package.name));
-            } else if self.is_updating {
+            } else {
                 self.add_status_message("Another operation is currently in progress".to_string());
             }
         }

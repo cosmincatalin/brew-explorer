@@ -271,14 +271,13 @@ fn render_package_list(f: &mut Frame, app: &mut App, area: ratatui::layout::Rect
 }
 
 /// Gets the appropriate style for a package based on its status
-fn get_package_style(package: &crate::models::PackageInfo) -> Style {
+fn get_package_style(package: &crate::entities::package_info::PackageInfo) -> Style {
     if package.outdated || package.has_update_available() {
         // Use a more visible reddish color for packages with updates available
         Style::default().fg(Color::Rgb(220, 80, 80)) // Soft reddish color
-    } else if package.is_installed() {
-        Style::default().fg(Color::Green)
     } else {
-        Style::default().fg(Color::White)
+        // All packages are installed (since they come from brew --installed)
+        Style::default().fg(Color::Green)
     }
 }
 
@@ -331,15 +330,14 @@ fn render_package_details(f: &mut Frame, app: &App, area: ratatui::layout::Rect)
 }
 
 /// Creates the detailed text for a package
-fn create_package_details_text(package: &crate::models::PackageInfo) -> Text<'_> {
+fn create_package_details_text(package: &crate::entities::package_info::PackageInfo) -> Text<'_> {
     let installed_status = package.installation_status();
     let status_colour = if package.outdated || package.has_update_available() {
         // Use the same reddish color for packages with updates available
         Color::Rgb(220, 80, 80) // Soft reddish color
-    } else if package.is_installed() {
-        Color::Green
     } else {
-        Color::Red
+        // All packages are installed (since they come from brew --installed)
+        Color::Green
     };
 
     let mut lines = vec![
@@ -407,7 +405,7 @@ fn create_package_details_text(package: &crate::models::PackageInfo) -> Text<'_>
 }
 
 /// Creates action hints based on package state
-fn create_action_hints(package: &crate::models::PackageInfo) -> Vec<Line<'_>> {
+fn create_action_hints(package: &crate::entities::package_info::PackageInfo) -> Vec<Line<'_>> {
     let mut lines = vec![
         Line::from(vec![
             Span::styled("⚡ Actions:", Style::default().add_modifier(Modifier::BOLD).fg(Color::Cyan))
@@ -415,25 +413,23 @@ fn create_action_hints(package: &crate::models::PackageInfo) -> Vec<Line<'_>> {
         Line::from("")
     ];
     
-    if package.is_installed() {
-        // Add uninstall action
+    // All packages are installed (since they come from brew --installed)
+    // Add uninstall action
+    lines.push(Line::from(vec![
+        Span::raw("    ◦ "),
+        Span::styled("uninstall", Style::default().fg(Color::Red).add_modifier(Modifier::BOLD)),
+        Span::styled(" (press 'x' to remove)", Style::default().fg(Color::Gray)),
+    ]));
+
+    // Only add update action if update is available
+    if package.has_update_available() {
         lines.push(Line::from(vec![
             Span::raw("    ◦ "),
-            Span::styled("uninstall", Style::default().fg(Color::Red).add_modifier(Modifier::BOLD)),
-            Span::styled(" (press 'x' to remove)", Style::default().fg(Color::Gray)),
+            Span::styled("update", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
+            Span::styled(" (press 'u' to update)", Style::default().fg(Color::Gray)),
         ]));
-        
-        // Only add update action if update is available
-        if package.has_update_available() {
-            lines.push(Line::from(vec![
-                Span::raw("    ◦ "),
-                Span::styled("update", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
-                Span::styled(" (press 'u' to update)", Style::default().fg(Color::Gray)),
-            ]));
-        }
     }
-    // Note: Install action removed - only show actions for installed packages
-    
+
     lines
 }
 
@@ -539,7 +535,6 @@ fn render_update_modal(f: &mut Frame, app: &App) {
     };
     
     // Create modal content
-    let title = format!("{} {}", modal_title, package_name);
     let progress_text = format!("{}% - {}", progress, stage_text);
     
     let content = vec![
@@ -563,6 +558,7 @@ fn render_update_modal(f: &mut Frame, app: &App) {
     ];
     
     // Create the modal block
+    let title = format!("{} {}", modal_title, package_name);
     let modal_block = Block::default()
         .title(title)
         .borders(Borders::ALL)
