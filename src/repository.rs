@@ -1,4 +1,4 @@
-use crate::models::{PackageInfo, PackageType, BrewInfoResponse, BrewFormulae, BrewCask};
+use crate::models::{PackageInfo, PackageType, BrewInfoResponse, BrewFormula, BrewCask};
 use anyhow::Result;
 use std::any::Any;
 use std::collections::{HashMap, HashSet};
@@ -124,7 +124,7 @@ struct PackageRequest {
 
 /// Real Homebrew repository that fetches only installed packages
 pub struct HomebrewRepository {
-    installed_packages: Arc<Mutex<Vec<PackageInfo>>>,
+    installed_packages: Vec<PackageInfo>,
     cache: Arc<Mutex<HashMap<String, PackageInfo>>>,
     current_status: Arc<Mutex<Option<String>>>,
     request_sender: Sender<PackageRequest>,
@@ -133,8 +133,6 @@ pub struct HomebrewRepository {
     loading_animation_state: Arc<Mutex<usize>>, // For animated loading dots
     last_animation_update: Arc<Mutex<Instant>>, // Track last animation update
     uninstalled_packages: Arc<Mutex<HashMap<String, Instant>>>, // Track recently uninstalled packages
-    last_package_list_update: Arc<Mutex<Instant>>, // Track when package list was last refreshed
-    force_refresh_on_next_call: Arc<Mutex<bool>>, // Flag to force refresh
 }
 
 /// Helper functions for calling brew commands
@@ -168,7 +166,7 @@ fn brew_info(package_name: &str) -> Result<BrewInfoResponse> {
 
 impl HomebrewRepository {
     pub fn new() -> Self {
-        let mut initial_packages = Vec::new();
+        let mut installed_packages = Vec::new();
         let cache = Arc::new(Mutex::new(HashMap::new()));
         let current_status = Arc::new(Mutex::new(None));
         let current_request = Arc::new(Mutex::new(None));
@@ -193,76 +191,23 @@ impl HomebrewRepository {
         match brew_info_all_installed() {
             Ok(brew_response) => {
                 // Process formulae - only include packages installed directly (not as dependencies)
-                for formulae in brew_response.formulae {
-                    // Check if this formulae was installed directly by looking at the installation info
-                    let is_directly_installed = formulae.installed.iter().any(|install_info| {
+                for formula in brew_response.formulae {
+                    let is_directly_installed = formula.installed.iter().any(|install_info| {
                         install_info.installed_on_request || !install_info.installed_as_dependency
                     });
-                    
-                    // Skip packages that were only installed as dependencies
                     if !is_directly_installed {
                         continue;
                     }
-                    
-                    let latest_install = formulae.installed
-                        .iter()
-                        .max_by(|a, b| {
-                            // First compare by timestamp
-                            let time_cmp = a.time.cmp(&b.time);
-                            if time_cmp != std::cmp::Ordering::Equal {
-                                return time_cmp;
-                            }
-                            // If timestamps are equal, compare versions (considering _X revisions)
-                            compare_homebrew_versions(&a.version, &b.version)
-                        });
-                    
-                    let (installed_version, installed_at) = match latest_install {
-                        Some(install) => (Some(install.version.clone()), Some(install.time)),
-                        None => (None, None),
-                    };
-                    
-                    let current_version = formulae.versions.stable
-                        .unwrap_or_else(|| formulae.versions.head.unwrap_or_else(|| "unknown".to_string()));
-                    
-                    initial_packages.push(PackageInfo::new_with_caveats(
-                        formulae.name.clone(),
-                        formulae.desc,
-                        formulae.homepage,
-                        current_version,
-                        installed_version,
-                        PackageType::Formulae,
-                        Some(formulae.tap),
-                        formulae.outdated,
-                        formulae.caveats,
-                        installed_at,
-                    ));
+                    installed_packages.push(brew_formulae_to_package_info(&formula));
                 }
-                
                 // Process casks
                 for cask in brew_response.casks {
-                    let display_name = cask.name.first()
-                        .unwrap_or(&cask.token)
-                        .clone();
-                    let description = cask.desc
-                        .unwrap_or_else(|| format!("{} (Cask application)", display_name));
-                    
-                    initial_packages.push(PackageInfo::new_with_caveats(
-                        cask.token,
-                        description,
-                        cask.homepage,
-                        cask.version.clone(),
-                        cask.installed.clone(),
-                        PackageType::Cask,
-                        Some(cask.tap),
-                        cask.outdated,
-                        cask.caveats,
-                        None, // Casks don't have installation timestamp in the JSON
-                    ));
+                    installed_packages.push(brew_cask_to_package_info(&cask));
                 }
                 
                 // If no packages are found, show a helpful message
-                if initial_packages.is_empty() {
-                    initial_packages.push(PackageInfo::new_with_type(
+                if installed_packages.is_empty() {
+                    installed_packages.push(PackageInfo::new_with_type(
                         "no-packages".to_string(),
                         "No packages are currently installed via Homebrew. Use 'brew install <package>' to install packages.".to_string(),
                         "https://brew.sh".to_string(),
@@ -275,7 +220,7 @@ impl HomebrewRepository {
             }
             Err(err) => {
                 // If we can't load packages, provide a detailed error message
-                initial_packages.push(PackageInfo::new_with_type(
+                installed_packages.push(PackageInfo::new_with_type(
                     "homebrew-error".to_string(),
                     format!("Error loading packages from Homebrew: {}. Make sure Homebrew is installed and accessible.", err),
                     "https://brew.sh".to_string(),
@@ -288,7 +233,7 @@ impl HomebrewRepository {
         }
         
         Self {
-            installed_packages: Arc::new(Mutex::new(initial_packages)),
+            installed_packages,
             cache,
             current_status,
             request_sender,
@@ -297,8 +242,6 @@ impl HomebrewRepository {
             loading_animation_state,
             last_animation_update,
             uninstalled_packages: Arc::new(Mutex::new(HashMap::new())),
-            last_package_list_update: Arc::new(Mutex::new(Instant::now())),
-            force_refresh_on_next_call: Arc::new(Mutex::new(false)),
         }
     }
     
@@ -330,8 +273,8 @@ impl HomebrewRepository {
             // Sort by priority (priority requests first, then by request time)
             pending_queue.sort_by(|a, b| {
                 match (a.priority, b.priority) {
-                    (true, false) => std::cmp::Ordering::Less,
-                    (false, true) => std::cmp::Ordering::Greater,
+                    (true, false) => Ordering::Less,
+                    (false, true) => Ordering::Greater,
                     _ => a.requested_at.cmp(&b.requested_at),
                 }
             });
@@ -370,9 +313,9 @@ impl HomebrewRepository {
                         let mut to_cache = Vec::new();
                         
                         // Look for matching formulae
-                        for formulae in &package.formulae {
-                            let pkg_info = brew_formulae_to_package_info(formulae);
-                            to_cache.push((formulae.name.clone(), pkg_info));
+                        for formula in &package.formulae {
+                            let pkg_info = brew_formulae_to_package_info(formula);
+                            to_cache.push((formula.name.clone(), pkg_info));
                         }
                         
                         // Look for matching cask
@@ -516,164 +459,27 @@ impl PackageRepository for HomebrewRepository {
     fn get_all_packages(&self) -> Result<Vec<PackageInfo>> {
         let now = Instant::now();
         
-        // Clean up old uninstalled packages (older than 2 minutes)
+        // Clean up old uninstalled packages (older than 30 seconds)
         if let Ok(mut uninstalled) = self.uninstalled_packages.lock() {
             uninstalled.retain(|_, timestamp| {
-                now.duration_since(*timestamp) < Duration::from_secs(120)
+                now.duration_since(*timestamp) < Duration::from_secs(30)
             });
         }
         
-        // Check if we need to force refresh or if enough time has passed (30 seconds)
-        let should_refresh = {
-            let force_refresh = if let Ok(mut force) = self.force_refresh_on_next_call.lock() {
-                let should_force = *force;
-                *force = false; // Reset the flag
-                should_force
-            } else {
-                false
-            };
-            
-            let time_based_refresh = if let Ok(last_update) = self.last_package_list_update.lock() {
-                now.duration_since(*last_update) > Duration::from_secs(30)
-            } else {
-                true
-            };
-            
-            force_refresh || time_based_refresh
-        };
-        
-        // Get blacklisted packages
+        // Filter out recently uninstalled packages
         let blacklisted_packages: HashSet<String> = if let Ok(uninstalled) = self.uninstalled_packages.lock() {
             uninstalled.keys().cloned().collect()
         } else {
             HashSet::new()
         };
         
-        if should_refresh {
-            // Fetch fresh package list from Homebrew only when needed
-            match brew_info_all_installed() {
-                Ok(brew_response) => {
-                    let mut fresh_packages = Vec::new();
-                    
-                    // Process formulae - only include packages installed directly (not as dependencies)
-                    for formulae in brew_response.formulae {
-                        // Skip blacklisted packages
-                        if blacklisted_packages.contains(&formulae.name) {
-                            continue;
-                        }
-                        
-                        // Check if this formulae was installed directly by looking at the installation info
-                        let is_directly_installed = formulae.installed.iter().any(|install_info| {
-                            install_info.installed_on_request || !install_info.installed_as_dependency
-                        });
-                        
-                        // Skip packages that were only installed as dependencies
-                        if !is_directly_installed {
-                            continue;
-                        }
-                        
-                        let latest_install = formulae.installed
-                            .iter()
-                            .max_by(|a, b| {
-                                // First compare by timestamp
-                                let time_cmp = a.time.cmp(&b.time);
-                                if time_cmp != std::cmp::Ordering::Equal {
-                                    return time_cmp;
-                                }
-                                // If timestamps are equal, compare versions (considering _X revisions)
-                                compare_homebrew_versions(&a.version, &b.version)
-                            });
-                        
-                        let (installed_version, installed_at) = match latest_install {
-                            Some(install) => (Some(install.version.clone()), Some(install.time)),
-                            None => (None, None),
-                        };
-                        
-                        let current_version = formulae.versions.stable
-                            .unwrap_or_else(|| formulae.versions.head.unwrap_or_else(|| "unknown".to_string()));
-                        
-                        fresh_packages.push(PackageInfo::new_with_caveats(
-                            formulae.name.clone(),
-                            formulae.desc,
-                            formulae.homepage,
-                            current_version,
-                            installed_version,
-                            PackageType::Formulae,
-                            Some(formulae.tap),
-                            formulae.outdated,
-                            formulae.caveats,
-                            installed_at,
-                        ));
-                    }
-                    
-                    // Process casks
-                    for cask in brew_response.casks {
-                        // Skip blacklisted packages
-                        if blacklisted_packages.contains(&cask.token) {
-                            continue;
-                        }
-                        
-                        let display_name = cask.name.first()
-                            .unwrap_or(&cask.token)
-                            .clone();
-                        let description = cask.desc
-                            .unwrap_or_else(|| format!("{} (Cask application)", display_name));
-                        
-                        fresh_packages.push(PackageInfo::new_with_caveats(
-                            cask.token,
-                            description,
-                            cask.homepage,
-                            cask.version.clone(),
-                            cask.installed.clone(),
-                            PackageType::Cask,
-                            Some(cask.tap),
-                            cask.outdated,
-                            cask.caveats,
-                            None, // Casks don't have installation timestamp in the JSON
-                        ));
-                    }
-                    
-                    // Update the cached package list and timestamp
-                    if let Ok(mut last_update) = self.last_package_list_update.lock() {
-                        *last_update = now;
-                    }
-                    
-                    // Update the internal cached package list
-                    if let Ok(mut installed_packages) = self.installed_packages.lock() {
-                        *installed_packages = fresh_packages.clone();
-                    }
-                    
-                    Ok(fresh_packages)
-                }
-                Err(_) => {
-                    // Fallback to cached list if fresh fetch fails, but still filter out blacklisted packages
-                    let filtered_packages: Vec<PackageInfo> = if let Ok(installed_packages) = self.installed_packages.lock() {
-                        installed_packages
-                            .iter()
-                            .filter(|pkg| !blacklisted_packages.contains(&pkg.name))
-                            .cloned()
-                            .collect()
-                    } else {
-                        Vec::new()
-                    };
-                    
-                    Ok(filtered_packages)
-                }
-            }
-        } else {
-            // Use cached data with blacklist filtering
-            let filtered_packages: Vec<PackageInfo> = if let Ok(installed_packages) = self.installed_packages.lock() {
-                installed_packages
-                    .iter()
-                    .filter(|pkg| !blacklisted_packages.contains(&pkg.name))
-                    .cloned()
-                    .collect()
-            } else {
-                Vec::new()
-            };
-            
-            Ok(filtered_packages)
-        }
+        let filtered_packages: Vec<PackageInfo> = self.installed_packages
+            .iter()
+            .filter(|pkg| !blacklisted_packages.contains(&pkg.name))
+            .cloned()
+            .collect();
+        
+        Ok(filtered_packages)
     }
 
 
@@ -687,28 +493,23 @@ impl PackageRepository for HomebrewRepository {
         }
         
         // Look for the package in our installed packages list
-        let placeholder = if let Ok(installed_packages) = self.installed_packages.lock() {
-            installed_packages
-                .iter()
-                .find(|pkg| pkg.name == package_name)
-                .cloned()
-        } else {
-            None
-        };
+        let placeholder = self.installed_packages
+            .iter()
+            .find(|pkg| pkg.name == package_name);
             
         if let Some(pkg) = placeholder {
-            if pkg.description.starts_with("Loading package information") {
+            return if pkg.description.starts_with("Loading package information") {
                 // Request with HIGH PRIORITY for currently selected package
                 self.request_package_details(package_name.to_string(), true);
-                
+
                 // Return an updated placeholder with animated loading text
                 let animated_loading_text = self.get_animated_loading_text();
                 let mut updated_pkg = pkg.clone();
                 updated_pkg.description = animated_loading_text;
-                return Some(updated_pkg);
+                Some(updated_pkg)
             } else {
                 // Return the existing detailed info
-                return Some(pkg.clone());
+                Some(pkg.clone())
             }
         }
         
@@ -718,19 +519,13 @@ impl PackageRepository for HomebrewRepository {
     }
 
     fn uninstall_package(&self, package_name: &str) -> Result<()> {
-        // For packages that might require password input, we need to run the command interactively
-        // This will temporarily leave the TUI and allow proper password input
-        use std::process::Stdio;
-        
-        let status = Command::new("brew")
+        let output = Command::new("brew")
             .args(["uninstall", package_name])
-            .stdin(Stdio::inherit())
-            .stdout(Stdio::inherit())
-            .stderr(Stdio::inherit())
-            .status()?;
+            .output()?;
         
-        if !status.success() {
-            return Err(anyhow::anyhow!("Failed to uninstall {} (exit code: {})", package_name, status.code().unwrap_or(-1)));
+        if !output.status.success() {
+            let error_msg = String::from_utf8_lossy(&output.stderr);
+            return Err(anyhow::anyhow!("Failed to uninstall {}: {}", package_name, error_msg));
         }
         
         Ok(())
@@ -764,10 +559,10 @@ impl PackageRepository for HomebrewRepository {
         let brew_response: BrewInfoResponse = serde_json::from_str(&json_str)?;
         
         // Process formulae
-        for formulae in brew_response.formulae {
-            if formulae.name == package_name {
+        for formula in brew_response.formulae {
+            if formula.name == package_name {
                 // Check if this formulae was installed directly
-                let is_directly_installed = formulae.installed.iter().any(|install_info| {
+                let is_directly_installed = formula.installed.iter().any(|install_info| {
                     install_info.installed_on_request || !install_info.installed_as_dependency
                 });
                 
@@ -775,12 +570,12 @@ impl PackageRepository for HomebrewRepository {
                     return Ok(None); // Not a direct installation
                 }
                 
-                let latest_install = formulae.installed
+                let latest_install = formula.installed
                     .iter()
                     .max_by(|a, b| {
                         // First compare by timestamp
                         let time_cmp = a.time.cmp(&b.time);
-                        if time_cmp != std::cmp::Ordering::Equal {
+                        if time_cmp != Ordering::Equal {
                             return time_cmp;
                         }
                         // If timestamps are equal, compare versions (considering _X revisions)
@@ -792,19 +587,19 @@ impl PackageRepository for HomebrewRepository {
                     None => (None, None),
                 };
                 
-                let current_version = formulae.versions.stable
-                    .unwrap_or_else(|| formulae.versions.head.unwrap_or_else(|| "unknown".to_string()));
+                let current_version = formula.versions.stable
+                    .unwrap_or_else(|| formula.versions.head.unwrap_or_else(|| "unknown".to_string()));
                 
                 let package_info = PackageInfo::new_with_caveats(
-                    formulae.name.clone(),
-                    formulae.desc,
-                    formulae.homepage,
+                    formula.name.clone(),
+                    formula.desc,
+                    formula.homepage,
                     current_version,
                     installed_version,
                     PackageType::Formulae,
-                    Some(formulae.tap),
-                    formulae.outdated,
-                    formulae.caveats,
+                    Some(formula.tap),
+                    formula.outdated,
+                    formula.caveats,
                     installed_at,
                 );
                 
@@ -854,21 +649,9 @@ impl PackageRepository for HomebrewRepository {
             pending.remove(package_name);
         }
         
-        // Clear current request if it matches
-        if let Ok(mut current) = self.current_request.lock()
-            && let Some(ref current_name) = *current
-                && current_name == package_name {
-                    *current = None;
-                }
-        
-        // Add to uninstalled blacklist to prevent re-adding for 2 minutes
+        // Add to uninstalled blacklist to prevent re-adding for 30 seconds
         if let Ok(mut uninstalled) = self.uninstalled_packages.lock() {
             uninstalled.insert(package_name.to_string(), now);
-        }
-        
-        // Force a refresh on the next call to get_all_packages()
-        if let Ok(mut force_refresh) = self.force_refresh_on_next_call.lock() {
-            *force_refresh = true;
         }
     }
     
@@ -877,19 +660,10 @@ impl PackageRepository for HomebrewRepository {
     }
 }
 
-impl HomebrewRepository {
-    /// Force the next call to get_all_packages() to fetch fresh data
-    pub fn force_refresh(&self) {
-        if let Ok(mut force_refresh) = self.force_refresh_on_next_call.lock() {
-            *force_refresh = true;
-        }
-    }
-}
-
 /// Convert a brew Formulae JSON to our PackageInfo structure
-fn brew_formulae_to_package_info(formulae: &BrewFormulae) -> PackageInfo {
-    let (installed_version, installed_at) = if !formulae.installed.is_empty() {
-        let latest_install = formulae.installed
+fn brew_formulae_to_package_info(formula: &BrewFormula) -> PackageInfo {
+    let (installed_version, installed_at) = if !formula.installed.is_empty() {
+        let latest_install = formula.installed
             .iter()
             .max_by_key(|install| install.time);
         match latest_install {
@@ -901,15 +675,15 @@ fn brew_formulae_to_package_info(formulae: &BrewFormulae) -> PackageInfo {
     };
 
     PackageInfo::new_with_caveats(
-        formulae.name.clone(),
-        formulae.desc.clone(),
-        formulae.homepage.clone(),
-        formulae.versions.stable.clone().unwrap_or_else(|| "unknown".to_string()),
+        formula.name.clone(),
+        formula.desc.clone(),
+        formula.homepage.clone(),
+        formula.versions.stable.clone().unwrap_or_else(|| "unknown".to_string()),
         installed_version,
         PackageType::Formulae,
-        Some(formulae.tap.clone()),
-        formulae.outdated,
-        formulae.caveats.clone(),
+        Some(formula.tap.clone()),
+        formula.outdated,
+        formula.caveats.clone(),
         installed_at,
     )
 }

@@ -535,7 +535,6 @@ fn render_update_modal(f: &mut Frame, app: &App) {
             (base_progress + additional, "Removing", "Removing application files...", "Uninstalling")
         },
         UpdateStage::UninstallCleaning => (80, "Cleaning", "Cleaning up dependencies...", "Uninstalling"),
-        UpdateStage::UninstallRefreshing => (95, "Refreshing", "Refreshing package list...", "Uninstalling"),
         UpdateStage::UninstallFinished => (100, "Complete", "Uninstall completed successfully! Closing...", "Uninstalling"),
     };
     
@@ -601,9 +600,9 @@ fn render_update_modal(f: &mut Frame, app: &App) {
 fn render_uninstall_confirmation_modal(f: &mut Frame, app: &App) {
     let area = f.area();
     
-    // Create a centered modal area - make it larger to ensure instructions are visible
-    let modal_width = 60;
-    let modal_height = 10;
+    // Create a centered modal area
+    let modal_width = 50;
+    let modal_height = 8;
     let x = (area.width.saturating_sub(modal_width)) / 2;
     let y = (area.height.saturating_sub(modal_height)) / 2;
     
@@ -621,7 +620,7 @@ fn render_uninstall_confirmation_modal(f: &mut Frame, app: &App) {
     let package_name = app.pending_uninstall_package.as_deref()
         .unwrap_or("Unknown Package");
     
-    // Create modal content with clearer instructions
+    // Create modal content
     let content = vec![
         Line::from(""),
         Line::from(Span::styled(
@@ -634,15 +633,13 @@ fn render_uninstall_confirmation_modal(f: &mut Frame, app: &App) {
             Style::default().fg(Color::Gray).add_modifier(Modifier::ITALIC)
         )),
         Line::from(""),
-        Line::from(""),
         Line::from(vec![
-            Span::styled("❯ Press ", Style::default().fg(Color::White)),
+            Span::styled("Press ", Style::default().fg(Color::Gray)),
             Span::styled("Y", Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)),
-            Span::styled(" to confirm, ", Style::default().fg(Color::White)),
+            Span::styled(" to confirm, ", Style::default().fg(Color::Gray)),
             Span::styled("N", Style::default().fg(Color::Red).add_modifier(Modifier::BOLD)),
-            Span::styled(" to cancel", Style::default().fg(Color::White)),
+            Span::styled(" to cancel", Style::default().fg(Color::Gray)),
         ]),
-        Line::from(""),
     ];
     
     // Create the modal block

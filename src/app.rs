@@ -18,7 +18,6 @@ pub enum UpdateStage {
     UninstallStarting,
     UninstallRemoving,
     UninstallCleaning,
-    UninstallRefreshing,
     UninstallFinished,
 }
 
@@ -54,7 +53,6 @@ pub struct App {
     pub update_stage: UpdateStage,
     pub is_uninstalling: bool, // Track if this is an uninstall operation
     pub real_update_called: bool, // Track if real update has been called
-    pub refresh_triggered: bool, // Track if package refresh has been triggered during uninstall
     pub pending_uninstall_package: Option<String>, // Package pending uninstall confirmation
     // Modal state
     pub modal_state: ModalState,
@@ -85,7 +83,6 @@ impl App {
             update_stage: UpdateStage::Idle,
             is_uninstalling: false,
             real_update_called: false,
-            refresh_triggered: false,
             pending_uninstall_package: None,
             modal_state: ModalState::None,
         };
@@ -410,14 +407,12 @@ impl App {
     }
     
     /// Update package details from cache if available (for background loading)
-    /// Returns true if any updates were made
-    pub fn update_package_details_if_needed(&mut self) -> bool {
-        let mut updates_made = false;
-        
-        // Check for loading animation updates - but only if we have a selected package
+    pub fn update_package_details(&mut self) {
+        // Check for loading animation updates
         if let Some(homebrew_repo) = self.repository.as_any().downcast_ref::<crate::repository::HomebrewRepository>() {
             if homebrew_repo.update_loading_animations() {
-                updates_made = true;
+                // Animation state changed, we might want to refresh if showing loading text
+                // The UI will automatically get the updated text when it calls get_selected_package_details
             }
             
             // Update package types in the main list when details become available
@@ -441,7 +436,6 @@ impl App {
                     && selected_index < self.filtered_items.len() {
                         self.list_state.select(Some(selected_index));
                     }
-                updates_made = true;
             }
         }
         
@@ -451,11 +445,8 @@ impl App {
                 && homebrew_repo.has_updated_details(&selected_package.name)
                     && let Some(_updated_details) = homebrew_repo.get_cached_details(&selected_package.name) {
                         // Details have been updated - no need to do anything as they're already cached
-                        updates_made = true;
                     }
         }
-        
-        updates_made
     }
 
     /// Gets the current list of packages to display
@@ -592,7 +583,6 @@ impl App {
         self.update_start_time = Some(Instant::now());
         self.update_stage = UpdateStage::UninstallStarting;
         self.real_update_called = false; // Track if real uninstall has been called
-        self.refresh_triggered = false; // Reset refresh flag
         self.modal_state = ModalState::UpdateProgress;
         self.add_status_message(format!("Starting uninstall for {}", package_name));
         
@@ -662,17 +652,6 @@ impl App {
                 self.add_status_message(format!("Cleaning up {} dependencies...", package_name));
             }
             UpdateStage::UninstallCleaning if elapsed > Duration::from_millis(3500) => {
-                self.update_stage = UpdateStage::UninstallRefreshing;
-                self.add_status_message(format!("🔄 Refreshing package list after uninstalling {}", package_name));
-            }
-            UpdateStage::UninstallRefreshing if elapsed > Duration::from_millis(4000) => {
-                // Force refresh the package list during this stage (only once)
-                if !self.refresh_triggered {
-                    if let Some(homebrew_repo) = self.repository.as_any().downcast_ref::<crate::repository::HomebrewRepository>() {
-                        homebrew_repo.force_refresh();
-                    }
-                    self.refresh_triggered = true;
-                }
                 self.update_stage = UpdateStage::UninstallFinished;
                 self.add_status_message(format!("✅ {} uninstalled successfully!", package_name));
             }
@@ -705,30 +684,6 @@ impl App {
             self.items.retain(|p| p.name != name);
             if self.is_searching {
                 self.filtered_items.retain(|p| p.name != name);
-            }
-            
-            // Force a refresh of the installed packages list to ensure consistency
-            self.add_status_message(format!("🔄 Refreshing package list after uninstalling {}", name));
-            match self.repository.get_all_packages() {
-                Ok(fresh_packages) => {
-                    // Update our package list with fresh data (excluding uninstalled package)
-                    let old_count = self.items.len();
-                    self.items = fresh_packages.into_iter()
-                        .filter(|p| p.name != name)
-                        .collect();
-                    let new_count = self.items.len();
-                    
-                    // Update filtered list if we're searching
-                    if self.is_searching {
-                        self.apply_filter();
-                    }
-                    
-                    self.add_status_message(format!("📦 Package list updated: {} → {} packages", old_count, new_count));
-                }
-                Err(e) => {
-                    // If refresh fails, at least we removed it from our local lists
-                    self.add_status_message(format!("⚠️  Failed to refresh package list: {}", e));
-                }
             }
             
             // Adjust selection if needed
@@ -803,10 +758,6 @@ impl App {
                 let dots = ".".repeat(((elapsed.as_millis() / 300) % 4) as usize);
                 Some(format!("🧹 Cleaning up {} dependencies{}", package_name, dots))
             }
-            UpdateStage::UninstallRefreshing => {
-                let dots = ".".repeat(((elapsed.as_millis() / 200) % 4) as usize);
-                Some(format!("🔄 Refreshing package list{}", dots))
-            }
             UpdateStage::UninstallFinished => Some(format!("✅ {} uninstalled successfully!", package_name)),
             UpdateStage::Idle => None,
         }
@@ -843,17 +794,9 @@ impl App {
     }
 
     /// Updates repository status if available (called periodically from main loop)
-    /// Only updates if there's actual new status to avoid unnecessary work
     pub fn update_repository_status(&mut self) {
         if let Some(status) = self.get_repository_status() {
-            // Only add status message if it's different from the last one
-            if let Some((last_msg, _)) = self.status_messages.back() {
-                if last_msg != &status {
-                    self.add_status_message(status);
-                }
-            } else {
-                self.add_status_message(status);
-            }
+            self.add_status_message(status);
         }
     }
     
