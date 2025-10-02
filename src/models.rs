@@ -131,12 +131,12 @@ pub enum PackageType {
 /// Serde structures for parsing brew JSON output
 #[derive(Debug, Deserialize)]
 pub struct BrewInfoResponse {
-    pub formulae: Vec<BrewFormula>,
+    pub formulae: Vec<BrewFormulae>,
     pub casks: Vec<BrewCask>,
 }
 
 #[derive(Debug, Deserialize)]
-pub struct BrewFormula {
+pub struct BrewFormulae {
     pub name: String,
     pub tap: String,
     pub desc: String,

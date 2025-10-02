@@ -61,7 +61,7 @@ fn main() -> Result<()> {
         // Handle any key events during loading (allow quit)
         if poll(Duration::from_millis(50))?
             && let Event::Key(key) = event::read()?
-                && key.kind == KeyEventKind::Press && key.code == event::KeyCode::Char('q') {
+                && key.kind == KeyEventKind::Press && key.code == crossterm::event::KeyCode::Char('q') {
                     // Cleanup and exit
                     disable_raw_mode()?;
                     execute!(terminal.backend_mut(), LeaveAlternateScreen, DisableMouseCapture)?;
@@ -91,9 +91,12 @@ fn main() -> Result<()> {
 }
 
 fn run_app<B: Backend>(terminal: &mut Terminal<B>, app: &mut App) -> Result<()> {
-    let tick_rate = Duration::from_millis(100);
+    let tick_rate = Duration::from_millis(250); // Slower tick rate for better performance
     let mut last_tick = Instant::now();
     let mut last_refresh = Instant::now();
+    let mut last_layout_calc = Instant::now();
+    let mut last_status_update = Instant::now();
+    let mut cached_terminal_size = terminal.size()?;
 
     loop {
         terminal.draw(|f| render_ui(f, app))?;
@@ -102,37 +105,44 @@ fn run_app<B: Backend>(terminal: &mut Terminal<B>, app: &mut App) -> Result<()> 
             .checked_sub(last_tick.elapsed())
             .unwrap_or_else(|| Duration::from_secs(0));
 
-        if poll(timeout)?
+        if crossterm::event::poll(timeout)?
             && let Event::Key(key) = event::read()?
                 && key.kind == KeyEventKind::Press {
                     handle_key_event(app, key)?;
                 }
 
         if last_tick.elapsed() >= tick_rate {
-            // Update scroll offset for auto-scrolling
-            let size = terminal.size()?;
-            let rect = ratatui::layout::Rect {
-                x: 0,
-                y: 0,
-                width: size.width,
-                height: size.height,
-            };
-            let chunks = ratatui::layout::Layout::default()
-                .direction(ratatui::layout::Direction::Horizontal)
-                .constraints([
-                    ratatui::layout::Constraint::Percentage(40),
-                    ratatui::layout::Constraint::Percentage(60),
-                ])
-                .split(rect);
+            // Only update scroll offset if we're actually updating
+            if app.is_updating || app.update_package_details_if_needed() {
+                // Only recalculate layout if terminal size changed or we haven't calculated in a while
+                let current_size = terminal.size()?;
+                if current_size != cached_terminal_size || last_layout_calc.elapsed() >= Duration::from_secs(1) {
+                    cached_terminal_size = current_size;
+                    let rect = ratatui::layout::Rect {
+                        x: 0,
+                        y: 0,
+                        width: current_size.width,
+                        height: current_size.height,
+                    };
+                    let chunks = ratatui::layout::Layout::default()
+                        .direction(ratatui::layout::Direction::Horizontal)
+                        .constraints([
+                            ratatui::layout::Constraint::Percentage(40),
+                            ratatui::layout::Constraint::Percentage(60),
+                        ])
+                        .split(rect);
 
-            let available_width = chunks[0].width.saturating_sub(4) as usize; // Account for borders
-            app.update_scroll(available_width);
+                    let available_width = chunks[0].width.saturating_sub(4) as usize; // Account for borders
+                    app.update_scroll(available_width);
+                    last_layout_calc = Instant::now();
+                }
+            }
             
-            // Update repository status to get background caching messages
-            app.update_repository_status();
-            
-            // Update package details from background loading
-            app.update_package_details();
+            // Update repository status less frequently
+            if last_status_update.elapsed() >= Duration::from_secs(1) {
+                app.update_repository_status();
+                last_status_update = Instant::now();
+            }
             
             // Update mock update progress
             app.update_mock_progress();
@@ -140,8 +150,8 @@ fn run_app<B: Backend>(terminal: &mut Terminal<B>, app: &mut App) -> Result<()> 
             last_tick = Instant::now();
         }
         
-        // Refresh package list every 2 seconds to pick up cached packages
-        if last_refresh.elapsed() >= Duration::from_secs(2) {
+        // Refresh package list only when needed - check every 60 seconds but only refresh if not actively using the app
+        if last_refresh.elapsed() >= Duration::from_secs(60) && app.last_interaction.elapsed() >= Duration::from_secs(10) {
             if app.refresh_package_list().is_err() {
                 // Ignore refresh errors to avoid crashing the app
             }
