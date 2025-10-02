@@ -110,6 +110,7 @@ pub trait PackageRepository: Any + Send + Sync {
     fn update_package(&self, package_name: &str) -> Result<()>;
     fn refresh_package(&self, package_name: &str) -> Result<Option<PackageInfo>>;
     fn clear_package_cache(&self, package_name: &str);
+    fn refresh_all_packages(&self) -> Result<()>;
     
     /// Allows downcasting to concrete types
     fn as_any(&self) -> &dyn Any;
@@ -124,7 +125,7 @@ struct PackageRequest {
 
 /// Real Homebrew repository that fetches only installed packages
 pub struct HomebrewRepository {
-    installed_packages: Vec<PackageInfo>,
+    installed_packages: Arc<Mutex<Vec<PackageInfo>>>,
     cache: Arc<Mutex<HashMap<String, PackageInfo>>>,
     current_status: Arc<Mutex<Option<String>>>,
     request_sender: Sender<PackageRequest>,
@@ -233,7 +234,7 @@ impl HomebrewRepository {
         }
         
         Self {
-            installed_packages,
+            installed_packages: Arc::new(Mutex::new(installed_packages)),
             cache,
             current_status,
             request_sender,
@@ -473,11 +474,15 @@ impl PackageRepository for HomebrewRepository {
             HashSet::new()
         };
         
-        let filtered_packages: Vec<PackageInfo> = self.installed_packages
-            .iter()
-            .filter(|pkg| !blacklisted_packages.contains(&pkg.name))
-            .cloned()
-            .collect();
+        let filtered_packages: Vec<PackageInfo> = if let Ok(installed_guard) = self.installed_packages.lock() {
+            installed_guard
+                .iter()
+                .filter(|pkg| !blacklisted_packages.contains(&pkg.name))
+                .cloned()
+                .collect()
+        } else {
+            Vec::new()
+        };
         
         Ok(filtered_packages)
     }
@@ -493,9 +498,14 @@ impl PackageRepository for HomebrewRepository {
         }
         
         // Look for the package in our installed packages list
-        let placeholder = self.installed_packages
-            .iter()
-            .find(|pkg| pkg.name == package_name);
+        let placeholder = if let Ok(installed_guard) = self.installed_packages.lock() {
+            installed_guard
+                .iter()
+                .find(|pkg| pkg.name == package_name)
+                .cloned()
+        } else {
+            None
+        };
             
         if let Some(pkg) = placeholder {
             return if pkg.description.starts_with("Loading package information") {
@@ -652,6 +662,59 @@ impl PackageRepository for HomebrewRepository {
         // Add to uninstalled blacklist to prevent re-adding for 30 seconds
         if let Ok(mut uninstalled) = self.uninstalled_packages.lock() {
             uninstalled.insert(package_name.to_string(), now);
+        }
+    }
+    
+    fn refresh_all_packages(&self) -> Result<()> {
+        // Reload all installed packages from brew
+        match brew_info_all_installed() {
+            Ok(brew_response) => {
+                let mut new_packages = Vec::new();
+                
+                // Process formulae - only include packages installed directly (not as dependencies)
+                for formula in brew_response.formulae {
+                    let is_directly_installed = formula.installed.iter().any(|install_info| {
+                        install_info.installed_on_request || !install_info.installed_as_dependency
+                    });
+                    if !is_directly_installed {
+                        continue;
+                    }
+                    new_packages.push(brew_formulae_to_package_info(&formula));
+                }
+                
+                // Process casks
+                for cask in brew_response.casks {
+                    new_packages.push(brew_cask_to_package_info(&cask));
+                }
+                
+                // If no packages are found, show a helpful message
+                if new_packages.is_empty() {
+                    new_packages.push(PackageInfo::new_with_type(
+                        "no-packages".to_string(),
+                        "No packages are currently installed via Homebrew. Use 'brew install <package>' to install packages.".to_string(),
+                        "https://brew.sh".to_string(),
+                        "1.0.0".to_string(),
+                        None,
+                        PackageType::Unknown,
+                        None,
+                    ));
+                }
+                
+                // Update the installed packages list
+                if let Ok(mut installed_guard) = self.installed_packages.lock() {
+                    *installed_guard = new_packages;
+                }
+                
+                // Clear the uninstalled packages blacklist since we have fresh data
+                if let Ok(mut uninstalled) = self.uninstalled_packages.lock() {
+                    uninstalled.clear();
+                }
+                
+                Ok(())
+            }
+            Err(err) => {
+                Err(anyhow::anyhow!("Failed to refresh package list: {}", err))
+            }
         }
     }
     

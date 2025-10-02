@@ -92,6 +92,10 @@ impl App {
 
     /// Refreshes the package list from the repository
     pub fn refresh_packages(&mut self) -> Result<()> {
+        // Use the new repository method to refresh all packages
+        self.repository.refresh_all_packages()?;
+        
+        // Get the refreshed packages from the repository
         self.items = self.repository.get_all_packages()?;
         self.apply_filter();
         self.reset_column_scroll(); // Reset horizontal scrolling on refresh
@@ -686,6 +690,11 @@ impl App {
                 self.filtered_items.retain(|p| p.name != name);
             }
             
+            // Refresh the entire package list to ensure consistency
+            if let Err(e) = self.refresh_packages() {
+                self.add_status_message(format!("⚠️  Failed to refresh package list: {}", e));
+            }
+            
             // Adjust selection if needed
             let max_index = if self.is_searching {
                 self.filtered_items.len()
@@ -716,13 +725,19 @@ impl App {
         self.update_stage = UpdateStage::Idle;
         self.modal_state = ModalState::None;
         
-        // Refresh only the updated package's metadata after a small delay
+        // Refresh package list after update to ensure all metadata is current
         if let Some(name) = package_name {
             // Add a small delay to ensure brew has updated its internal state
             std::thread::sleep(Duration::from_millis(500));
             
+            // Try to refresh the specific package first
             if let Err(e) = self.refresh_single_package(name.clone()) {
                 self.add_status_message(format!("⚠️  Failed to refresh {}: {}", name, e));
+            }
+            
+            // Also refresh the entire package list to ensure consistency
+            if let Err(e) = self.refresh_packages() {
+                self.add_status_message(format!("⚠️  Failed to refresh package list: {}", e));
             }
         }
     }
