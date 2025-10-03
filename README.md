@@ -29,7 +29,10 @@ Plus, you can quickly **uninstall old useless things** and **update whatever was
 
 ### Steps
 
-
+```shell
+brew tap cosmincatalin/tap
+brew install brew-explorer
+```
 
 ### Navigation
 
