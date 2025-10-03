@@ -51,7 +51,7 @@ pub struct App {
     pub update_package_name: Option<String>,
     pub update_start_time: Option<Instant>,
     pub update_stage: UpdateStage,
-    pub is_uninstalling: bool, // Track if this is an uninstall operation
+    pub is_uninstalling: bool,    // Track if this is an uninstall operation
     pub real_update_called: bool, // Track if real update has been called
     pub pending_uninstall_package: Option<String>, // Package pending uninstall confirmation
     // Modal state
@@ -94,23 +94,13 @@ impl App {
     pub fn refresh_packages(&mut self) -> Result<()> {
         // Use the new repository method to refresh all packages
         self.repository.refresh_all_packages()?;
-        
+
         // Get the refreshed packages from the repository
         self.items = self.repository.get_all_packages()?;
         self.apply_filter();
         self.reset_column_scroll(); // Reset horizontal scrolling on refresh
-        
-        // Check for status updates from repository if it's a HomebrewRepository
-        if let Some(status) = self.get_repository_status() {
-            self.add_status_message(status);
-        }
-        
+
         Ok(())
-    }
-    
-    /// Gets status from repository if available
-    fn get_repository_status(&self) -> Option<String> {
-        self.repository.get_current_status()
     }
 
     /// Moves to the next item in the list
@@ -188,11 +178,11 @@ impl App {
         if let Some(selected_idx) = self.list_state.selected() {
             // Calculate which column the selected item is in
             let selected_column = selected_idx / self.rows_per_column;
-            
+
             // Calculate the range of visible columns
             let leftmost_visible = self.column_scroll_offset;
             let rightmost_visible = self.column_scroll_offset + self.current_columns - 1;
-            
+
             // Adjust scroll if selected column is not visible
             if selected_column < leftmost_visible {
                 // Selected column is to the left of visible area
@@ -305,7 +295,7 @@ impl App {
                 // Move to previous column, same row
                 let new_col = current_col - 1;
                 let new_index = new_col * self.rows_per_column + current_row;
-                
+
                 // Make sure the new index is valid
                 if new_index < items_len {
                     self.list_state.select(Some(new_index));
@@ -336,7 +326,7 @@ impl App {
             // Calculate current column and row
             let current_col = current / self.rows_per_column;
             let current_row = current % self.rows_per_column;
-            
+
             // Calculate total number of columns needed
             let total_columns = items_len.div_ceil(self.rows_per_column);
 
@@ -344,7 +334,7 @@ impl App {
                 // Move to next column, same row
                 let new_col = current_col + 1;
                 let new_index = new_col * self.rows_per_column + current_row;
-                
+
                 // Make sure the new index is valid
                 if new_index < items_len {
                     self.list_state.select(Some(new_index));
@@ -364,19 +354,19 @@ impl App {
         };
 
         if let Some(selected) = self.list_state.selected()
-            && selected < items.len() {
-                let item_name = &items[selected].name;
-                let name_width = item_name.len();
+            && selected < items.len()
+        {
+            let item_name = &items[selected].name;
+            let name_width = item_name.len();
 
-                // Only scroll if the name is longer than available width and 3 seconds have passed
-                if name_width > available_width
-                    && self.last_interaction.elapsed() > Duration::from_secs(3)
-                {
-                    let max_offset = name_width.saturating_sub(available_width);
-                    self.scroll_offset =
-                        (self.scroll_offset + 1) % (max_offset + available_width / 2);
-                }
+            // Only scroll if the name is longer than available width and 3 seconds have passed
+            if name_width > available_width
+                && self.last_interaction.elapsed() > Duration::from_secs(3)
+            {
+                let max_offset = name_width.saturating_sub(available_width);
+                self.scroll_offset = (self.scroll_offset + 1) % (max_offset + available_width / 2);
             }
+        }
     }
 
     /// Gets the currently selected package
@@ -392,56 +382,7 @@ impl App {
 
     /// Gets the currently selected package with full details (fetches if needed)
     pub fn get_selected_package_details(&self) -> Option<PackageInfo> {
-        if let Some(package) = self.get_selected_package() {
-            // Try to get detailed info from repository
-            if let Some(detailed_package) = self.repository.get_package_details(&package.name) {
-                return Some(detailed_package);
-            }
-            // If no detailed info available, return the placeholder
-            Some(package.clone())
-        } else {
-            None
-        }
-    }
-    
-    /// Update package details from cache if available (for background loading)
-    pub fn update_package_details(&mut self) {
-        // Check for loading animation updates
-        if self.repository.update_loading_animations() {
-            // Animation state changed, we might want to refresh if showing loading text
-            // The UI will automatically get the updated text when it calls get_selected_package_details
-        }
-
-        // Update package types in the main list when details become available
-        let mut list_updated = false;
-        let current_selection = self.list_state.selected(); // Save current selection
-
-        for package in &mut self.items {
-            if package.package_type == crate::entities::package_info::PackageType::Unknown
-                && let Some(detailed_package) = self.repository.get_cached_details(&package.name) {
-                    package.package_type = detailed_package.package_type.clone();
-                    package.tap = detailed_package.tap.clone();
-                    list_updated = true;
-                }
-        }
-
-        // Update filtered items if the main list was updated, but preserve selection
-        if list_updated {
-            self.apply_filter();
-            // Restore the selection after filtering
-            if let Some(selected_index) = current_selection
-                && selected_index < self.filtered_items.len() {
-                    self.list_state.select(Some(selected_index));
-                }
-        }
-        
-        if let Some(selected_package) = self.get_selected_package() {
-            // Check if there are updated details available
-            if self.repository.has_updated_details(&selected_package.name)
-                && let Some(_updated_details) = self.repository.get_cached_details(&selected_package.name) {
-                    // Details have been updated - no need to do anything as they're already cached
-                }
-        }
+        self.get_selected_package().cloned()
     }
 
     /// Gets the current list of packages to display
@@ -467,7 +408,7 @@ impl App {
     pub fn end_search(&mut self) {
         self.is_searching = false;
         self.search_query.clear();
-        
+
         // Always go to the first item (index 0)
         if !self.items.is_empty() {
             self.list_state.select(Some(0));
@@ -562,7 +503,7 @@ impl App {
         self.real_update_called = false;
         self.modal_state = ModalState::UpdateProgress;
         self.add_status_message(format!("Starting update for {}", package_name));
-        
+
         // The real update will be called during the "Installing" stage
         // to better simulate the actual timing of when brew upgrade runs
     }
@@ -578,7 +519,7 @@ impl App {
         self.real_update_called = false; // Track if real uninstall has been called
         self.modal_state = ModalState::UpdateProgress;
         self.add_status_message(format!("Starting uninstall for {}", package_name));
-        
+
         // The real uninstall will be called during the "UninstallRemoving" stage
     }
 
@@ -588,7 +529,8 @@ impl App {
             return;
         }
 
-        let elapsed = self.update_start_time
+        let elapsed = self
+            .update_start_time
             .map(|start| start.elapsed())
             .unwrap_or_default();
 
@@ -607,13 +549,16 @@ impl App {
                 // Call real update during Installing stage if not called yet
                 if !self.real_update_called && !self.is_uninstalling {
                     if let Err(e) = self.repository.update_package(package_name) {
-                        self.add_status_message(format!("❌ Failed to update {}: {}", package_name, e));
+                        self.add_status_message(format!(
+                            "❌ Failed to update {}: {}",
+                            package_name, e
+                        ));
                         self.finish_mock_update();
                         return;
                     }
                     self.real_update_called = true;
                 }
-                
+
                 self.update_stage = UpdateStage::Completing;
                 self.add_status_message(format!("Completing {} installation...", package_name));
             }
@@ -634,13 +579,16 @@ impl App {
                 // Call real uninstall during UninstallRemoving stage if not called yet
                 if !self.real_update_called && self.is_uninstalling {
                     if let Err(e) = self.repository.uninstall_package(package_name) {
-                        self.add_status_message(format!("❌ Failed to uninstall {}: {}", package_name, e));
+                        self.add_status_message(format!(
+                            "❌ Failed to uninstall {}: {}",
+                            package_name, e
+                        ));
                         self.finish_mock_uninstall();
                         return;
                     }
                     self.real_update_called = true;
                 }
-                
+
                 self.update_stage = UpdateStage::UninstallCleaning;
                 self.add_status_message(format!("Cleaning up {} dependencies...", package_name));
             }
@@ -659,7 +607,7 @@ impl App {
     /// Finishes the mock uninstall and removes package from list
     fn finish_mock_uninstall(&mut self) {
         let package_name = self.update_package_name.clone();
-        
+
         self.is_updating = false;
         self.is_uninstalling = false;
         self.real_update_called = false;
@@ -667,37 +615,38 @@ impl App {
         self.update_start_time = None;
         self.update_stage = UpdateStage::Idle;
         self.modal_state = ModalState::None;
-        
+
         // Remove package from list after uninstall
         if let Some(name) = package_name {
             // Clear the package from repository cache to prevent reappearance
             self.repository.clear_package_cache(&name);
-            
+
             // Remove from our package lists immediately since uninstall was successful
             self.items.retain(|p| p.name != name);
             if self.is_searching {
                 self.filtered_items.retain(|p| p.name != name);
             }
-            
+
             // Refresh the entire package list to ensure consistency
             if let Err(e) = self.refresh_packages() {
                 self.add_status_message(format!("⚠️  Failed to refresh package list: {}", e));
             }
-            
+
             // Adjust selection if needed
             let max_index = if self.is_searching {
                 self.filtered_items.len()
             } else {
                 self.items.len()
             };
-            
+
             if max_index == 0 {
                 self.list_state.select(None);
             } else if let Some(selected) = self.list_state.selected()
-                && selected >= max_index {
-                    self.list_state.select(Some(max_index - 1));
-                }
-            
+                && selected >= max_index
+            {
+                self.list_state.select(Some(max_index - 1));
+            }
+
             self.add_status_message(format!("✅ Successfully uninstalled {}", name));
         }
     }
@@ -705,7 +654,7 @@ impl App {
     /// Finishes the mock update and resets state
     fn finish_mock_update(&mut self) {
         let package_name = self.update_package_name.clone();
-        
+
         self.is_updating = false;
         self.is_uninstalling = false;
         self.real_update_called = false;
@@ -713,17 +662,17 @@ impl App {
         self.update_start_time = None;
         self.update_stage = UpdateStage::Idle;
         self.modal_state = ModalState::None;
-        
+
         // Refresh package list after update to ensure all metadata is current
         if let Some(name) = package_name {
             // Add a small delay to ensure brew has updated its internal state
             std::thread::sleep(Duration::from_millis(500));
-            
+
             // Try to refresh the specific package first
             if let Err(e) = self.refresh_single_package(name.clone()) {
                 self.add_status_message(format!("⚠️  Failed to refresh {}: {}", name, e));
             }
-            
+
             // Also refresh the entire package list to ensure consistency
             if let Err(e) = self.refresh_packages() {
                 self.add_status_message(format!("⚠️  Failed to refresh package list: {}", e));
@@ -750,19 +699,28 @@ impl App {
                 let dots = ".".repeat(((elapsed.as_millis() / 200) % 4) as usize);
                 Some(format!("🔧 Installing {} updates{}", package_name, dots))
             }
-            UpdateStage::Completing => Some(format!("✨ Finalizing {} installation...", package_name)),
+            UpdateStage::Completing => {
+                Some(format!("✨ Finalizing {} installation...", package_name))
+            }
             UpdateStage::Finished => Some(format!("✅ {} updated successfully!", package_name)),
             // Uninstall status messages
-            UpdateStage::UninstallStarting => Some(format!("🗑️  Preparing to uninstall {}...", package_name)),
+            UpdateStage::UninstallStarting => {
+                Some(format!("🗑️  Preparing to uninstall {}...", package_name))
+            }
             UpdateStage::UninstallRemoving => {
                 let dots = ".".repeat(((elapsed.as_millis() / 200) % 4) as usize);
                 Some(format!("🗂️  Removing {} files{}", package_name, dots))
             }
             UpdateStage::UninstallCleaning => {
                 let dots = ".".repeat(((elapsed.as_millis() / 300) % 4) as usize);
-                Some(format!("🧹 Cleaning up {} dependencies{}", package_name, dots))
+                Some(format!(
+                    "🧹 Cleaning up {} dependencies{}",
+                    package_name, dots
+                ))
             }
-            UpdateStage::UninstallFinished => Some(format!("✅ {} uninstalled successfully!", package_name)),
+            UpdateStage::UninstallFinished => {
+                Some(format!("✅ {} uninstalled successfully!", package_name))
+            }
             UpdateStage::Idle => None,
         }
     }
@@ -797,43 +755,6 @@ impl App {
         self.status_messages.back().map(|(msg, _)| msg.clone())
     }
 
-    /// Updates repository status if available (called periodically from main loop)
-    pub fn update_repository_status(&mut self) {
-        if let Some(status) = self.get_repository_status() {
-            self.add_status_message(status);
-        }
-    }
-    
-    /// Refresh package list to pick up newly cached packages
-    pub fn refresh_package_list(&mut self) -> Result<()> {
-        let current_selection = self.list_state.selected();
-        let current_search = self.search_query.clone();
-        
-        // Get updated packages from repository
-        self.items = self.repository.get_all_packages()?;
-        
-        // Reapply search filter if we're in search mode
-        if self.is_searching {
-            self.search_query = current_search;
-            self.apply_filter();
-        }
-        
-        // Restore selection if possible
-        if let Some(selection) = current_selection {
-            let max_index = if self.is_searching {
-                self.filtered_items.len()
-            } else {
-                self.items.len()
-            };
-            
-            if max_index > 0 {
-                self.list_state.select(Some(selection.min(max_index - 1)));
-            }
-        }
-        
-        Ok(())
-    }
-
     /// Confirms the uninstall operation
     pub fn confirm_uninstall(&mut self) {
         if let Some(package_name) = self.pending_uninstall_package.take() {
@@ -857,13 +778,17 @@ impl App {
                 if let Some(index) = self.items.iter().position(|p| p.name == package_name) {
                     self.items[index] = updated_package.clone();
                 }
-                
+
                 // Update the package in filtered list if we're searching
                 if self.is_searching
-                    && let Some(index) = self.filtered_items.iter().position(|p| p.name == package_name) {
-                        self.filtered_items[index] = updated_package;
-                    }
-                
+                    && let Some(index) = self
+                        .filtered_items
+                        .iter()
+                        .position(|p| p.name == package_name)
+                {
+                    self.filtered_items[index] = updated_package;
+                }
+
                 self.add_status_message(format!("📦 Refreshed metadata for {}", package_name));
             }
             Ok(None) => {

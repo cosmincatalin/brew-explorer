@@ -1,8 +1,7 @@
+use crate::entities::brew_info_response::BrewInfoResponse;
 use anyhow::Result;
 use std::cmp::Ordering;
 use std::process::Command;
-use crate::entities::brew_info_response::{BrewCask, BrewFormula, BrewInfoResponse};
-use crate::entities::package_info::{PackageInfo, PackageType};
 
 /// Formats a duration in seconds into a human-readable "time ago" string
 pub fn format_time_ago(seconds: u64) -> String {
@@ -112,9 +111,7 @@ fn compare_version_strings(a: &str, b: &str) -> Ordering {
 
 /// Helper functions for calling brew commands
 pub fn brew_update() -> Result<()> {
-    let output = Command::new("brew")
-        .arg("update")
-        .output()?;
+    let output = Command::new("brew").arg("update").output()?;
 
     if !output.status.success() {
         return Err(anyhow::anyhow!("brew update command failed"));
@@ -129,80 +126,14 @@ pub fn brew_info_all_installed() -> Result<BrewInfoResponse> {
         .output()?;
 
     if !output.status.success() {
-        return Err(anyhow::anyhow!("brew info --json=v2 --installed command failed"));
+        return Err(anyhow::anyhow!(
+            "brew info --json=v2 --installed command failed"
+        ));
     }
 
     let output_str = String::from_utf8(output.stdout)?;
     let response: BrewInfoResponse = serde_json::from_str(&output_str)?;
     Ok(response)
-}
-
-pub fn brew_info(package_name: &str) -> Result<BrewInfoResponse> {
-    let output = Command::new("brew")
-        .args(["info", "--json=v2", package_name])
-        .output()?;
-
-    if !output.status.success() {
-        return Err(anyhow::anyhow!("brew info command failed for {}", package_name));
-    }
-
-    let output_str = String::from_utf8(output.stdout)?;
-    let response: BrewInfoResponse = serde_json::from_str(&output_str)?;
-    Ok(response)
-}
-
-/// Convert a brew Formulae JSON to our PackageInfo structure
-pub fn brew_formulae_to_package_info(formula: &BrewFormula) -> PackageInfo {
-    let (installed_version, installed_at) = if !formula.installed.is_empty() {
-        let latest_install = formula.installed
-            .iter()
-            .max_by_key(|install| install.time);
-        match latest_install {
-            Some(install) => (Some(install.version.clone()), Some(install.time)),
-            None => (None, None),
-        }
-    } else {
-        (None, None)
-    };
-
-    PackageInfo::new(
-        formula.name.clone(),
-        formula.desc.clone(),
-        formula.homepage.clone(),
-        formula.versions.stable.clone().unwrap_or_else(|| "unknown".to_string()),
-        installed_version,
-        PackageType::Formulae,
-        Some(formula.tap.clone()),
-        formula.outdated,
-        formula.caveats.clone(),
-        installed_at,
-    )
-}
-
-/// Convert a brew Cask JSON to our PackageInfo structure
-pub fn brew_cask_to_package_info(cask: &BrewCask) -> PackageInfo {
-    let installed_version = cask.installed.clone();
-
-    let description = cask.desc.clone().unwrap_or_else(|| {
-        if cask.name.is_empty() {
-            "No description available".to_string()
-        } else {
-            cask.name.join(", ")
-        }
-    });
-
-    PackageInfo::new(
-        cask.token.clone(),
-        description,
-        cask.homepage.clone(),
-        cask.version.clone(),
-        installed_version,
-        PackageType::Cask,
-        Some(format!("{} (cask)", cask.tap)),
-        cask.outdated,
-        cask.caveats.clone(),
-        None, // Casks don't have installation timestamp in the JSON
-    )
 }
 
 #[cfg(test)]
@@ -213,13 +144,25 @@ mod tests {
     fn test_compare_homebrew_versions_with_revisions() {
         // Test revision comparison
         assert_eq!(compare_homebrew_versions("76.1", "76.1_2"), Ordering::Less);
-        assert_eq!(compare_homebrew_versions("76.1_2", "76.1"), Ordering::Greater);
-        assert_eq!(compare_homebrew_versions("3.2.4", "3.2.4_4"), Ordering::Less);
-        assert_eq!(compare_homebrew_versions("3.2.4_4", "3.2.4"), Ordering::Greater);
+        assert_eq!(
+            compare_homebrew_versions("76.1_2", "76.1"),
+            Ordering::Greater
+        );
+        assert_eq!(
+            compare_homebrew_versions("3.2.4", "3.2.4_4"),
+            Ordering::Less
+        );
+        assert_eq!(
+            compare_homebrew_versions("3.2.4_4", "3.2.4"),
+            Ordering::Greater
+        );
 
         // Test equal versions
         assert_eq!(compare_homebrew_versions("76.1", "76.1"), Ordering::Equal);
-        assert_eq!(compare_homebrew_versions("76.1_2", "76.1_2"), Ordering::Equal);
+        assert_eq!(
+            compare_homebrew_versions("76.1_2", "76.1_2"),
+            Ordering::Equal
+        );
 
         // Test different base versions
         assert_eq!(compare_homebrew_versions("76.1", "76.2"), Ordering::Less);
@@ -227,7 +170,10 @@ mod tests {
 
         // Test mixed scenarios
         assert_eq!(compare_homebrew_versions("76.1_5", "76.2"), Ordering::Less);
-        assert_eq!(compare_homebrew_versions("76.2", "76.1_5"), Ordering::Greater);
+        assert_eq!(
+            compare_homebrew_versions("76.2", "76.1_5"),
+            Ordering::Greater
+        );
     }
 
     #[test]
@@ -243,7 +189,10 @@ mod tests {
         assert_eq!(compare_version_strings("3.2.4", "3.2.4"), Ordering::Equal);
         assert_eq!(compare_version_strings("3.2.3", "3.2.4"), Ordering::Less);
         assert_eq!(compare_version_strings("3.2.4", "3.2.3"), Ordering::Greater);
-        assert_eq!(compare_version_strings("3.10.1", "3.2.4"), Ordering::Greater);
+        assert_eq!(
+            compare_version_strings("3.10.1", "3.2.4"),
+            Ordering::Greater
+        );
         assert_eq!(compare_version_strings("3.2.4", "3.10.1"), Ordering::Less);
     }
 }

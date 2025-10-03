@@ -1,23 +1,22 @@
 mod app;
+mod entities;
 mod events;
 mod helpers;
 mod repository;
 mod ui;
-mod entities;
 
 use anyhow::Result;
 use app::App;
 use crossterm::{
-    event::{self, poll, DisableMouseCapture, EnableMouseCapture, Event, KeyEventKind},
+    event::{self, DisableMouseCapture, EnableMouseCapture, Event, KeyEventKind, poll},
     execute,
-    terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
+    terminal::{EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode},
 };
 use events::handle_key_event;
-use ratatui::{backend::CrosstermBackend, prelude::Backend, Terminal};
+use ratatui::{Terminal, backend::CrosstermBackend, prelude::Backend};
 use repository::HomebrewRepository;
 use std::{
-    io,
-    thread,
+    io, thread,
     time::{Duration, Instant},
 };
 use ui::{render_loading_screen, render_ui};
@@ -34,7 +33,7 @@ fn main() -> Result<()> {
     let start_time = Instant::now();
     let mut loading_dots = 0;
     let mut last_dot_update = Instant::now();
-    
+
     // Create repository and app in a separate thread to show real loading progress
     let (tx, rx) = std::sync::mpsc::channel();
     thread::spawn(move || {
@@ -46,7 +45,7 @@ fn main() -> Result<()> {
         let app = App::new(repository);
         tx.send(app).unwrap();
     });
-    
+
     // Show loading screen until app is ready (real loading time)
     let mut app = loop {
         // Update loading animation every 200ms for smoother animation
@@ -54,29 +53,35 @@ fn main() -> Result<()> {
             loading_dots = (loading_dots + 1) % 4;
             last_dot_update = Instant::now();
         }
-        
+
         // Render loading screen
         terminal.draw(|f| render_loading_screen(f, loading_dots, start_time.elapsed()))?;
-        
+
         // Check if app is ready
         if let Ok(app_result) = rx.try_recv() {
             break app_result?;
         }
-        
+
         // Handle any key events during loading (allow quit)
         if poll(Duration::from_millis(50))?
             && let Event::Key(key) = event::read()?
-                && key.kind == KeyEventKind::Press && key.code == event::KeyCode::Char('q') {
-                    // Cleanup and exit
-                    disable_raw_mode()?;
-                    execute!(terminal.backend_mut(), LeaveAlternateScreen, DisableMouseCapture)?;
-                    terminal.show_cursor()?;
-                    return Ok(());
-                }
-        
+            && key.kind == KeyEventKind::Press
+            && key.code == event::KeyCode::Char('q')
+        {
+            // Cleanup and exit
+            disable_raw_mode()?;
+            execute!(
+                terminal.backend_mut(),
+                LeaveAlternateScreen,
+                DisableMouseCapture
+            )?;
+            terminal.show_cursor()?;
+            return Ok(());
+        }
+
         thread::sleep(Duration::from_millis(50));
     };
-    
+
     let res = run_app(&mut terminal, &mut app);
 
     // Restore terminal
@@ -98,7 +103,6 @@ fn main() -> Result<()> {
 fn run_app<B: Backend>(terminal: &mut Terminal<B>, app: &mut App) -> Result<()> {
     let tick_rate = Duration::from_millis(100);
     let mut last_tick = Instant::now();
-    let mut last_refresh = Instant::now();
 
     loop {
         terminal.draw(|f| render_ui(f, app))?;
@@ -109,9 +113,10 @@ fn run_app<B: Backend>(terminal: &mut Terminal<B>, app: &mut App) -> Result<()> 
 
         if poll(timeout)?
             && let Event::Key(key) = event::read()?
-                && key.kind == KeyEventKind::Press {
-                    handle_key_event(app, key)?;
-                }
+            && key.kind == KeyEventKind::Press
+        {
+            handle_key_event(app, key)?;
+        }
 
         if last_tick.elapsed() >= tick_rate {
             // Update scroll offset for auto-scrolling
@@ -132,25 +137,11 @@ fn run_app<B: Backend>(terminal: &mut Terminal<B>, app: &mut App) -> Result<()> 
 
             let available_width = chunks[0].width.saturating_sub(4) as usize; // Account for borders
             app.update_scroll(available_width);
-            
-            // Update repository status to get background caching messages
-            app.update_repository_status();
-            
-            // Update package details from background loading
-            app.update_package_details();
-            
+
             // Update mock update progress
             app.update_mock_progress();
-            
+
             last_tick = Instant::now();
-        }
-        
-        // Refresh package list every 2 seconds to pick up cached packages
-        if last_refresh.elapsed() >= Duration::from_secs(2) {
-            if app.refresh_package_list().is_err() {
-                // Ignore refresh errors to avoid crashing the app
-            }
-            last_refresh = Instant::now();
         }
 
         if app.should_quit {

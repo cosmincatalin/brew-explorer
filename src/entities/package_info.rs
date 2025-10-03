@@ -1,8 +1,8 @@
+use crate::entities::brew_info_response::{BrewCask, BrewFormula};
 use crate::helpers;
+use nestify::nest;
 use std::cmp::Ordering;
 use std::time::{SystemTime, UNIX_EPOCH};
-use nestify::nest;
-
 
 nest! {
     #[derive(Debug, Clone)]
@@ -61,8 +61,8 @@ impl PackageInfo {
             Some(installed) => {
                 // Use version comparison that understands revisions
                 match helpers::compare_homebrew_versions(installed, &self.current_version) {
-                    Ordering::Less => true,  // installed < current, update available
-                    Ordering::Equal | Ordering::Greater => false,  // installed >= current, no update needed
+                    Ordering::Less => true, // installed < current, update available
+                    Ordering::Equal | Ordering::Greater => false, // installed >= current, no update needed
                 }
             }
             None => false,
@@ -86,10 +86,7 @@ impl PackageInfo {
     /// Returns a human-readable string indicating how long ago the package was installed
     pub fn installed_ago(&self) -> Option<String> {
         if let Some(timestamp) = self.installed_at {
-            let now = SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .ok()?
-                .as_secs();
+            let now = SystemTime::now().duration_since(UNIX_EPOCH).ok()?.as_secs();
 
             if now >= timestamp {
                 let diff = now - timestamp;
@@ -106,6 +103,64 @@ impl PackageInfo {
             PackageType::Cask => format!("🍺 {}", self.name),
             PackageType::Unknown => self.name.clone(),
         }
+    }
+}
+
+impl From<&BrewFormula> for PackageInfo {
+    fn from(formula: &BrewFormula) -> Self {
+        let (installed_version, installed_at) = if !formula.installed.is_empty() {
+            let latest_install = formula.installed.iter().max_by_key(|install| install.time);
+            match latest_install {
+                Some(install) => (Some(install.version.clone()), Some(install.time)),
+                None => (None, None),
+            }
+        } else {
+            (None, None)
+        };
+
+        PackageInfo::new(
+            formula.name.clone(),
+            formula.desc.clone(),
+            formula.homepage.clone(),
+            formula
+                .versions
+                .stable
+                .clone()
+                .unwrap_or_else(|| "unknown".to_string()),
+            installed_version,
+            PackageType::Formulae,
+            Some(formula.tap.clone()),
+            formula.outdated,
+            formula.caveats.clone(),
+            installed_at,
+        )
+    }
+}
+
+impl From<&BrewCask> for PackageInfo {
+    fn from(cask: &BrewCask) -> Self {
+        let installed_version = cask.installed.clone();
+
+        let description = cask.desc.clone().unwrap_or_else(|| {
+            if cask.name.is_empty() {
+                "No description available".to_string()
+            } else {
+                cask.name.join(", ")
+            }
+        });
+
+        PackageInfo::new(
+            cask.token.clone(),
+            description,
+            cask.homepage.clone(),
+            cask.version.clone(),
+            installed_version,
+            PackageType::Cask,
+            Some(format!("{} (cask)", cask.tap)),
+            cask.outdated,
+            cask.caveats.clone(),
+            None, // Casks don't have installation timestamp in the JSON
+        )
     }
 }
 

@@ -1,17 +1,17 @@
 use crate::app::{App, ModalState, UpdateStage};
 use ratatui::{
+    Frame,
     layout::{Alignment, Constraint, Direction, Layout, Margin},
     style::{Color, Modifier, Style},
     text::{Line, Span, Text},
     widgets::{Block, Borders, Clear, Gauge, List, ListItem, Paragraph, Row, Table, Wrap},
-    Frame,
 };
 use std::time::Duration;
 
 /// Renders a fancy loading screen with ASCII art
 pub fn render_loading_screen(f: &mut Frame, loading_dots: usize, elapsed: std::time::Duration) {
     let area = f.area();
-    
+
     // ASCII art for "Brew Explorer"
     let ascii_art = vec![
         "  ██████╗ ██████╗ ███████╗██╗    ██╗",
@@ -28,7 +28,7 @@ pub fn render_loading_screen(f: &mut Frame, loading_dots: usize, elapsed: std::t
         "███████╗██╔╝ ██╗██║     ███████╗╚██████╔╝██║  ██║███████╗██║  ██║",
         "╚══════╝╚═╝  ╚═╝╚═╝     ╚══════╝ ╚═════╝ ╚═╝  ╚═╝╚══════╝╚═╝  ╚═╝",
     ];
-    
+
     // Create centered layout
     let vertical_layout = Layout::default()
         .direction(Direction::Vertical)
@@ -39,19 +39,26 @@ pub fn render_loading_screen(f: &mut Frame, loading_dots: usize, elapsed: std::t
             Constraint::Percentage(25),
         ])
         .split(area);
-    
+
     // ASCII art block
     let ascii_lines: Vec<Line> = ascii_art
         .iter()
-        .map(|line| Line::from(Span::styled(*line, Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD))))
+        .map(|line| {
+            Line::from(Span::styled(
+                *line,
+                Style::default()
+                    .fg(Color::Cyan)
+                    .add_modifier(Modifier::BOLD),
+            ))
+        })
         .collect();
-    
+
     let ascii_block = Paragraph::new(ascii_lines)
         .alignment(Alignment::Center)
         .block(Block::default());
-    
+
     f.render_widget(ascii_block, vertical_layout[1]);
-    
+
     // Loading message with animated dots
     let dots = match loading_dots {
         0 => "   ",
@@ -60,7 +67,7 @@ pub fn render_loading_screen(f: &mut Frame, loading_dots: usize, elapsed: std::t
         3 => "...",
         _ => "   ", // Reset to empty for smoother animation
     };
-    
+
     // Calculate elapsed seconds for display
     let elapsed_secs = elapsed.as_secs();
     let elapsed_display = if elapsed_secs > 0 {
@@ -68,22 +75,33 @@ pub fn render_loading_screen(f: &mut Frame, loading_dots: usize, elapsed: std::t
     } else {
         String::new()
     };
-    
+
     let loading_text = vec![
         Line::from(vec![
             Span::styled("🍺 ", Style::default()),
-            Span::styled("Loading Homebrew packages", Style::default().fg(Color::Yellow)),
-            Span::styled(dots, Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
+            Span::styled(
+                "Loading Homebrew packages",
+                Style::default().fg(Color::Yellow),
+            ),
+            Span::styled(
+                dots,
+                Style::default()
+                    .fg(Color::Yellow)
+                    .add_modifier(Modifier::BOLD),
+            ),
             Span::styled(elapsed_display, Style::default().fg(Color::Gray)),
         ]),
         Line::from(""),
-        Line::from(Span::styled("Press 'q' to quit", Style::default().fg(Color::DarkGray))),
+        Line::from(Span::styled(
+            "Press 'q' to quit",
+            Style::default().fg(Color::DarkGray),
+        )),
     ];
-    
+
     let loading_block = Paragraph::new(loading_text)
         .alignment(Alignment::Center)
         .block(Block::default());
-    
+
     f.render_widget(loading_block, vertical_layout[2]);
 }
 
@@ -104,7 +122,7 @@ pub fn render_ui(f: &mut Frame, app: &mut App) {
     render_package_list(f, app, content_chunks[0]);
     render_package_details(f, app, content_chunks[1]);
     render_status_bar(f, app, main_chunks[1]);
-    
+
     // Render modal if one is open
     if app.modal_state != ModalState::None {
         render_modal(f, app);
@@ -119,13 +137,13 @@ fn render_package_list(f: &mut Frame, app: &mut App, area: ratatui::layout::Rect
     // Assume minimum 25 characters per package name + 3 characters padding
     let min_column_width = 28;
     let max_visible_columns = (available_width / min_column_width).clamp(1, 4); // Cap at 4 columns for readability
-    
+
     let total_items = if app.is_searching {
         app.filtered_items.len()
     } else {
         app.items.len()
     };
-    
+
     // Create title
     let title = if app.is_searching {
         if total_items == 0 {
@@ -136,7 +154,7 @@ fn render_package_list(f: &mut Frame, app: &mut App, area: ratatui::layout::Rect
     } else {
         "Packages".to_string()
     };
-    
+
     if total_items == 0 {
         // Render empty list with message
         let empty_list = List::new(Vec::<ListItem>::new())
@@ -149,14 +167,14 @@ fn render_package_list(f: &mut Frame, app: &mut App, area: ratatui::layout::Rect
         f.render_stateful_widget(empty_list, area, &mut app.list_state);
         return;
     }
-    
+
     // Calculate the ideal rows per column for good distribution
     let ideal_rows_per_column = (area.height.saturating_sub(3)) as usize; // Account for borders and title
     let ideal_rows_per_column = ideal_rows_per_column.max(1);
-    
+
     // Calculate total columns needed to display all items
     let total_columns_needed = total_items.div_ceil(ideal_rows_per_column);
-    
+
     // Determine how many columns we can actually show
     let visible_columns = max_visible_columns.min(total_columns_needed);
     let rows_per_column = if total_columns_needed <= visible_columns {
@@ -166,10 +184,10 @@ fn render_package_list(f: &mut Frame, app: &mut App, area: ratatui::layout::Rect
         // More columns than can fit, use ideal row count
         ideal_rows_per_column
     };
-    
+
     // Update the app's layout information for navigation
     app.update_layout(visible_columns, rows_per_column);
-    
+
     let items = app.get_display_items();
 
     if visible_columns == 1 {
@@ -203,33 +221,33 @@ fn render_package_list(f: &mut Frame, app: &mut App, area: ratatui::layout::Rect
     } else {
         // Multi-column layout using table
         let column_width = available_width / visible_columns;
-        
+
         // Calculate total columns needed
         let total_columns = total_columns_needed;
-        
+
         // Create column constraints - equal width for all columns
         let constraints: Vec<Constraint> = (0..visible_columns)
             .map(|_| Constraint::Percentage((100 / visible_columns) as u16))
             .collect();
-        
+
         // Build rows for the table
         let mut table_rows: Vec<Row> = Vec::new();
-        
+
         // Debug: check current selection
         let selected_idx = app.list_state.selected();
-        
+
         for row_idx in 0..rows_per_column {
             let mut cells: Vec<Span> = Vec::new();
-            
+
             for visible_col_idx in 0..visible_columns {
                 // Calculate the actual column index considering scroll offset
                 let actual_col_idx = app.column_scroll_offset + visible_col_idx;
                 let item_idx = actual_col_idx * rows_per_column + row_idx;
-                
+
                 if item_idx < items.len() && actual_col_idx < total_columns {
                     let package = &items[item_idx];
                     let display_name = package.get_display_name();
-                    
+
                     // Truncate name to fit column width (Unicode-safe)
                     let truncated_name = if display_name.chars().count() > column_width - 2 {
                         let chars: Vec<char> = display_name.chars().collect();
@@ -238,9 +256,9 @@ fn render_package_list(f: &mut Frame, app: &mut App, area: ratatui::layout::Rect
                     } else {
                         display_name
                     };
-                    
+
                     let style = get_package_style(package);
-                    
+
                     // Check if this item is selected
                     let is_selected = selected_idx == Some(item_idx);
                     let final_style = if is_selected {
@@ -248,22 +266,25 @@ fn render_package_list(f: &mut Frame, app: &mut App, area: ratatui::layout::Rect
                     } else {
                         style
                     };
-                    
+
                     let prefix = if is_selected { ">> " } else { "   " };
-                    cells.push(Span::styled(format!("{}{}", prefix, truncated_name), final_style));
+                    cells.push(Span::styled(
+                        format!("{}{}", prefix, truncated_name),
+                        final_style,
+                    ));
                 } else {
                     // Empty cell for alignment
                     cells.push(Span::raw(""));
                 }
             }
-            
+
             table_rows.push(Row::new(cells));
         }
-        
+
         let table = Table::new(table_rows, constraints)
             .block(Block::default().borders(Borders::ALL).title(title))
             .column_spacing(1);
-        
+
         f.render_widget(table, area);
     }
 }
@@ -345,7 +366,10 @@ fn create_package_details_text(package: &crate::entities::package_info::PackageI
         ]),
         Line::from(""),
         Line::from(vec![
-            Span::styled("Description: ", Style::default().add_modifier(Modifier::BOLD)),
+            Span::styled(
+                "Description: ",
+                Style::default().add_modifier(Modifier::BOLD),
+            ),
             Span::raw(&package.description),
         ]),
         Line::from(""),
@@ -381,41 +405,44 @@ fn create_package_details_text(package: &crate::entities::package_info::PackageI
         ]),
         Line::from(""),
     ];
-    
+
     // Add installation time if available
     if let Some(time_ago) = package.installed_ago() {
         lines.push(Line::from(vec![
-            Span::styled(
-                "Installed: ",
-                Style::default().add_modifier(Modifier::BOLD),
-            ),
+            Span::styled("Installed: ", Style::default().add_modifier(Modifier::BOLD)),
             Span::styled(time_ago, Style::default().fg(Color::Cyan)),
         ]));
         lines.push(Line::from(""));
     }
-    
+
     lines.push(Line::from(""));
-    
+
     // Add the action hints as separate lines
     lines.extend(create_action_hints(package));
-    
+
     Text::from(lines)
 }
 
 /// Creates action hints based on package state
 fn create_action_hints(package: &crate::entities::package_info::PackageInfo) -> Vec<Line<'_>> {
     let mut lines = vec![
-        Line::from(vec![
-            Span::styled("⚡ Actions:", Style::default().add_modifier(Modifier::BOLD).fg(Color::Cyan))
-        ]),
-        Line::from("")
+        Line::from(vec![Span::styled(
+            "⚡ Actions:",
+            Style::default()
+                .add_modifier(Modifier::BOLD)
+                .fg(Color::Cyan),
+        )]),
+        Line::from(""),
     ];
-    
+
     // All packages are installed (since they come from brew --installed)
     // Add uninstall action
     lines.push(Line::from(vec![
         Span::raw("    ◦ "),
-        Span::styled("uninstall", Style::default().fg(Color::Red).add_modifier(Modifier::BOLD)),
+        Span::styled(
+            "uninstall",
+            Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
+        ),
         Span::styled(" (press 'x' to remove)", Style::default().fg(Color::Gray)),
     ]));
 
@@ -423,7 +450,12 @@ fn create_action_hints(package: &crate::entities::package_info::PackageInfo) -> 
     if package.has_update_available() {
         lines.push(Line::from(vec![
             Span::raw("    ◦ "),
-            Span::styled("update", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
+            Span::styled(
+                "update",
+                Style::default()
+                    .fg(Color::Yellow)
+                    .add_modifier(Modifier::BOLD),
+            ),
             Span::styled(" (press 'u' to update)", Style::default().fg(Color::Gray)),
         ]));
     }
@@ -481,30 +513,33 @@ fn render_modal(f: &mut Frame, app: &App) {
 /// Renders the update progress modal
 fn render_update_modal(f: &mut Frame, app: &App) {
     let area = f.area();
-    
+
     // Create a centered modal area
     let modal_width = 60;
     let modal_height = 12;
     let x = (area.width.saturating_sub(modal_width)) / 2;
     let y = (area.height.saturating_sub(modal_height)) / 2;
-    
+
     let modal_area = ratatui::layout::Rect {
         x,
         y,
         width: modal_width,
         height: modal_height,
     };
-    
+
     // Clear the area behind the modal
     f.render_widget(Clear, modal_area);
-    
+
     // Get update information
-    let package_name = app.update_package_name.as_deref()
+    let package_name = app
+        .update_package_name
+        .as_deref()
         .unwrap_or("Unknown Package");
-    let elapsed = app.update_start_time
+    let elapsed = app
+        .update_start_time
         .map(|start| start.elapsed())
         .unwrap_or_default();
-    
+
     // Calculate progress based on stage and timing
     let (progress, stage_text, details, modal_title) = match app.update_stage {
         UpdateStage::Idle => (0, "Idle", "No operation in progress", "No Operation"),
@@ -512,35 +547,67 @@ fn render_update_modal(f: &mut Frame, app: &App) {
         UpdateStage::Downloading => {
             let base_progress = 20;
             let additional = ((elapsed.as_millis() - 800) / 17).min(40) as u16; // Up to 40% more
-            (base_progress + additional, "Downloading", "Fetching update files...", "Updating")
-        },
+            (
+                base_progress + additional,
+                "Downloading",
+                "Fetching update files...",
+                "Updating",
+            )
+        }
         UpdateStage::Installing => {
             let base_progress = 60;
             let additional = ((elapsed.as_millis() - 2500) / 15).min(25) as u16; // Up to 25% more
-            (base_progress + additional, "Installing", "Installing new version...", "Updating")
-        },
+            (
+                base_progress + additional,
+                "Installing",
+                "Installing new version...",
+                "Updating",
+            )
+        }
         UpdateStage::Completing => (90, "Completing", "Finalizing installation...", "Updating"),
-        UpdateStage::Finished => (100, "Complete", "Update completed successfully! Closing...", "Updating"),
+        UpdateStage::Finished => (
+            100,
+            "Complete",
+            "Update completed successfully! Closing...",
+            "Updating",
+        ),
         // Uninstall stages
-        UpdateStage::UninstallStarting => (15, "Starting", "Preparing uninstall process...", "Uninstalling"),
+        UpdateStage::UninstallStarting => (
+            15,
+            "Starting",
+            "Preparing uninstall process...",
+            "Uninstalling",
+        ),
         UpdateStage::UninstallRemoving => {
             let base_progress = 30;
             let additional = ((elapsed.as_millis() - 500) / 15).min(40) as u16; // Up to 40% more
-            (base_progress + additional, "Removing", "Removing application files...", "Uninstalling")
-        },
-        UpdateStage::UninstallCleaning => (80, "Cleaning", "Cleaning up dependencies...", "Uninstalling"),
-        UpdateStage::UninstallFinished => (100, "Complete", "Uninstall completed successfully! Closing...", "Uninstalling"),
+            (
+                base_progress + additional,
+                "Removing",
+                "Removing application files...",
+                "Uninstalling",
+            )
+        }
+        UpdateStage::UninstallCleaning => (
+            80,
+            "Cleaning",
+            "Cleaning up dependencies...",
+            "Uninstalling",
+        ),
+        UpdateStage::UninstallFinished => (
+            100,
+            "Complete",
+            "Uninstall completed successfully! Closing...",
+            "Uninstalling",
+        ),
     };
-    
+
     // Create modal content
     let progress_text = format!("{}% - {}", progress, stage_text);
-    
+
     let content = vec![
         Line::from(""),
-        Line::from(Span::styled(
-            details,
-            Style::default().fg(Color::Cyan)
-        )),
+        Line::from(Span::styled(details, Style::default().fg(Color::Cyan))),
         Line::from(""),
         Line::from(progress_text),
         Line::from(""),
@@ -551,10 +618,12 @@ fn render_update_modal(f: &mut Frame, app: &App) {
             } else {
                 "Update in progress... Please wait for completion."
             },
-            Style::default().fg(Color::Yellow).add_modifier(Modifier::ITALIC)
+            Style::default()
+                .fg(Color::Yellow)
+                .add_modifier(Modifier::ITALIC),
         )),
     ];
-    
+
     // Create the modal block
     let title = format!("{} {}", modal_title, package_name);
     let modal_block = Block::default()
@@ -562,7 +631,7 @@ fn render_update_modal(f: &mut Frame, app: &App) {
         .borders(Borders::ALL)
         .border_style(Style::default().fg(Color::Blue))
         .style(Style::default().bg(Color::Black));
-    
+
     // Split modal area for content and progress bar
     let modal_layout = Layout::default()
         .direction(Direction::Vertical)
@@ -571,16 +640,16 @@ fn render_update_modal(f: &mut Frame, app: &App) {
             Constraint::Length(3),
         ])
         .split(modal_block.inner(modal_area));
-    
+
     // Render modal background
     f.render_widget(modal_block, modal_area);
-    
+
     // Render content
     let content_paragraph = Paragraph::new(content)
         .alignment(Alignment::Center)
         .wrap(Wrap { trim: true });
     f.render_widget(content_paragraph, modal_layout[0]);
-    
+
     // Render progress bar
     let progress_gauge = Gauge::default()
         .block(Block::default().borders(Borders::ALL).title("Progress"))
@@ -593,59 +662,73 @@ fn render_update_modal(f: &mut Frame, app: &App) {
 /// Renders the uninstall confirmation modal
 fn render_uninstall_confirmation_modal(f: &mut Frame, app: &App) {
     let area = f.area();
-    
+
     // Create a centered modal area
     let modal_width = 50;
     let modal_height = 8;
     let x = (area.width.saturating_sub(modal_width)) / 2;
     let y = (area.height.saturating_sub(modal_height)) / 2;
-    
+
     let modal_area = ratatui::layout::Rect {
         x,
         y,
         width: modal_width,
         height: modal_height,
     };
-    
+
     // Clear the area behind the modal
     f.render_widget(Clear, modal_area);
-    
+
     // Get package name
-    let package_name = app.pending_uninstall_package.as_deref()
+    let package_name = app
+        .pending_uninstall_package
+        .as_deref()
         .unwrap_or("Unknown Package");
-    
+
     // Create modal content
     let content = vec![
         Line::from(""),
         Line::from(Span::styled(
             format!("Are you sure you want to uninstall '{}'?", package_name),
-            Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)
+            Style::default()
+                .fg(Color::Yellow)
+                .add_modifier(Modifier::BOLD),
         )),
         Line::from(""),
         Line::from(Span::styled(
             "This action cannot be undone.",
-            Style::default().fg(Color::Gray).add_modifier(Modifier::ITALIC)
+            Style::default()
+                .fg(Color::Gray)
+                .add_modifier(Modifier::ITALIC),
         )),
         Line::from(""),
         Line::from(vec![
             Span::styled("Press ", Style::default().fg(Color::Gray)),
-            Span::styled("Y", Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)),
+            Span::styled(
+                "Y",
+                Style::default()
+                    .fg(Color::Green)
+                    .add_modifier(Modifier::BOLD),
+            ),
             Span::styled(" to confirm, ", Style::default().fg(Color::Gray)),
-            Span::styled("N", Style::default().fg(Color::Red).add_modifier(Modifier::BOLD)),
+            Span::styled(
+                "N",
+                Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
+            ),
             Span::styled(" to cancel", Style::default().fg(Color::Gray)),
         ]),
     ];
-    
+
     // Create the modal block
     let modal_block = Block::default()
         .title("⚠️  Confirm Uninstall")
         .borders(Borders::ALL)
         .border_style(Style::default().fg(Color::Red))
         .style(Style::default().bg(Color::Black));
-    
+
     // Render modal background
     f.render_widget(modal_block.clone(), modal_area);
-    
+
     // Render content
     let content_paragraph = Paragraph::new(content)
         .block(modal_block)
