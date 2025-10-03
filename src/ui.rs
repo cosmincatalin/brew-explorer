@@ -77,8 +77,6 @@ pub fn render_loading_screen(f: &mut Frame, loading_dots: usize, elapsed: std::t
             Span::styled(elapsed_display, Style::default().fg(Color::Gray)),
         ]),
         Line::from(""),
-        Line::from(Span::styled("This usually takes about 5 seconds", Style::default().fg(Color::Gray))),
-        Line::from(""),
         Line::from(Span::styled("Press 'q' to quit", Style::default().fg(Color::DarkGray))),
     ];
     
