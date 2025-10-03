@@ -1,149 +1,301 @@
-use crate::models::PackageInfo;
+use crate::entities::brew_info_response::BrewInfoResponse;
+use crate::entities::package_info::{PackageInfo, PackageType};
+use crate::helpers;
 use anyhow::Result;
+use std::cmp::Ordering;
+use std::collections::{HashMap, HashSet};
+use std::process::Command;
+use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
 
-/// Trait for package repository operations
-pub trait PackageRepository {
-    fn get_all_packages(&self) -> Result<Vec<PackageInfo>>;
-    fn get_installed_packages(&self) -> Result<Vec<PackageInfo>>;
-    fn search_packages(&self, query: &str) -> Result<Vec<PackageInfo>>;
-    fn install_package(&self, package_name: &str) -> Result<()>;
-    fn uninstall_package(&self, package_name: &str) -> Result<()>;
-    fn update_package(&self, package_name: &str) -> Result<()>;
+pub struct HomebrewRepository {
+    installed_packages: Arc<Mutex<Vec<PackageInfo>>>,
+    cache: Arc<Mutex<HashMap<String, PackageInfo>>>,
+    uninstalled_packages: Arc<Mutex<HashMap<String, Instant>>>, // Track recently uninstalled packages
 }
-
-/// Mock implementation for testing and development
-pub struct MockPackageRepository {
-    packages: Vec<PackageInfo>,
-}
-
-impl MockPackageRepository {
-    pub fn new() -> Self {
-        Self {
-            packages: Self::generate_sample_packages(),
-        }
-    }
-
-    fn generate_sample_packages() -> Vec<PackageInfo> {
-        vec![
-            PackageInfo::new(
-                "git".to_string(),
-                "Distributed revision control system".to_string(),
-                "https://git-scm.com".to_string(),
-                "2.42.0".to_string(),
-                Some("2.42.0".to_string()),
-            ),
-            PackageInfo::new(
-                "node".to_string(),
-                "Platform built on V8 to build network applications".to_string(),
-                "https://nodejs.org/".to_string(),
-                "20.8.0".to_string(),
-                Some("18.17.1".to_string()),
-            ),
-            PackageInfo::new(
-                "very-long-package-name-that-should-scroll-horizontally".to_string(),
-                "This is a package with an extremely long name to demonstrate horizontal scrolling functionality in the TUI interface".to_string(),
-                "https://example.com/very-long-package".to_string(),
-                "1.0.0".to_string(),
-                None,
-            ),
-            PackageInfo::new(
-                "python@3.11".to_string(),
-                "Interpreted, interactive, object-oriented programming language".to_string(),
-                "https://www.python.org/".to_string(),
-                "3.11.5".to_string(),
-                Some("3.11.5".to_string()),
-            ),
-            PackageInfo::new(
-                "rust".to_string(),
-                "Safe, concurrent, practical language".to_string(),
-                "https://www.rust-lang.org/".to_string(),
-                "1.72.0".to_string(),
-                Some("1.71.0".to_string()),
-            ),
-        ]
-    }
-}
-
-impl PackageRepository for MockPackageRepository {
-    fn get_all_packages(&self) -> Result<Vec<PackageInfo>> {
-        Ok(self.packages.clone())
-    }
-
-    fn get_installed_packages(&self) -> Result<Vec<PackageInfo>> {
-        Ok(self
-            .packages
-            .iter()
-            .filter(|pkg| pkg.is_installed())
-            .cloned()
-            .collect())
-    }
-
-    fn search_packages(&self, query: &str) -> Result<Vec<PackageInfo>> {
-        let query_lower = query.to_lowercase();
-        Ok(self
-            .packages
-            .iter()
-            .filter(|pkg| {
-                pkg.name.to_lowercase().contains(&query_lower)
-                    || pkg.description.to_lowercase().contains(&query_lower)
-            })
-            .cloned()
-            .collect())
-    }
-
-    fn install_package(&self, _package_name: &str) -> Result<()> {
-        // Mock implementation - in real version would call brew install
-        Ok(())
-    }
-
-    fn uninstall_package(&self, _package_name: &str) -> Result<()> {
-        // Mock implementation - in real version would call brew uninstall
-        Ok(())
-    }
-
-    fn update_package(&self, _package_name: &str) -> Result<()> {
-        // Mock implementation - in real version would call brew upgrade
-        Ok(())
-    }
-}
-
-/// Future implementation for actual Homebrew integration
-pub struct HomebrewRepository;
 
 impl HomebrewRepository {
     pub fn new() -> Self {
-        Self
-    }
-}
+        let installed_packages =  Self::load_installed_packages();
+        let cache = Arc::new(Mutex::new(HashMap::new()));
 
-impl PackageRepository for HomebrewRepository {
-    fn get_all_packages(&self) -> Result<Vec<PackageInfo>> {
-        // TODO: Implement actual brew command execution
-        todo!("Implement actual Homebrew integration")
-    }
-
-    fn get_installed_packages(&self) -> Result<Vec<PackageInfo>> {
-        // TODO: Implement brew list command
-        todo!("Implement actual Homebrew integration")
+        Self {
+            installed_packages: Arc::new(Mutex::new(installed_packages)),
+            cache,
+            uninstalled_packages: Arc::new(Mutex::new(HashMap::new())),
+        }
     }
 
-    fn search_packages(&self, _query: &str) -> Result<Vec<PackageInfo>> {
-        // TODO: Implement brew search command
-        todo!("Implement actual Homebrew integration")
+    /// Load all installed packages from Homebrew
+    fn load_installed_packages() -> Vec<PackageInfo> {
+        match helpers::brew_info_all_installed() {
+            Ok(brew_response) => {
+                let mut packages = Self::process_brew_response(brew_response);
+
+                // If no packages are found, show a helpful message
+                if packages.is_empty() {
+                    packages.push(Self::create_no_packages_placeholder());
+                }
+                packages
+            }
+            Err(err) => vec![Self::create_error_placeholder(err)],
+        }
     }
 
-    fn install_package(&self, _package_name: &str) -> Result<()> {
-        // TODO: Implement brew install command
-        todo!("Implement actual Homebrew integration")
+    /// Process a BrewInfoResponse and return a list of directly installed packages
+    fn process_brew_response(brew_response: BrewInfoResponse) -> Vec<PackageInfo> {
+        let mut packages = Vec::new();
+
+        // Process formulae - only include packages installed directly (not as dependencies)
+        for formula in brew_response.formulae {
+            let is_directly_installed = formula.installed.iter().any(|install_info| {
+                install_info.installed_on_request || !install_info.installed_as_dependency
+            });
+            if !is_directly_installed {
+                continue;
+            }
+            packages.push(PackageInfo::from(&formula));
+        }
+
+        // Process casks
+        for cask in brew_response.casks {
+            packages.push(PackageInfo::from(&cask));
+        }
+
+        packages
     }
 
-    fn uninstall_package(&self, _package_name: &str) -> Result<()> {
-        // TODO: Implement brew uninstall command
-        todo!("Implement actual Homebrew integration")
+    /// Create a placeholder for when no packages are installed
+    fn create_no_packages_placeholder() -> PackageInfo {
+        PackageInfo::new(
+            "no-packages".to_string(),
+            "No packages are currently installed via Homebrew. Use 'brew install <package>' to install packages.".to_string(),
+            "https://brew.sh".to_string(),
+            "1.0.0".to_string(),
+            None,
+            PackageType::Unknown,
+            None,
+            false,
+            None,
+            None,
+        )
     }
 
-    fn update_package(&self, _package_name: &str) -> Result<()> {
-        // TODO: Implement brew upgrade command
-        todo!("Implement actual Homebrew integration")
+    /// Create a placeholder for when there's an error loading packages
+    fn create_error_placeholder(err: anyhow::Error) -> PackageInfo {
+        PackageInfo::new(
+            "homebrew-error".to_string(),
+            format!(
+                "Error loading packages from Homebrew: {}. Make sure Homebrew is installed and accessible.",
+                err
+            ),
+            "https://brew.sh".to_string(),
+            "1.0.0".to_string(),
+            None,
+            PackageType::Unknown,
+            None,
+            false,
+            None,
+            None,
+        )
+    }
+
+    /// Get all installed packages
+    pub fn get_all_packages(&self) -> Result<Vec<PackageInfo>> {
+        let now = Instant::now();
+
+        // Clean up old uninstalled packages (older than 30 seconds)
+        if let Ok(mut uninstalled) = self.uninstalled_packages.lock() {
+            uninstalled
+                .retain(|_, timestamp| now.duration_since(*timestamp) < Duration::from_secs(30));
+        }
+
+        // Filter out recently uninstalled packages
+        let blacklisted_packages: HashSet<String> =
+            if let Ok(uninstalled) = self.uninstalled_packages.lock() {
+                uninstalled.keys().cloned().collect()
+            } else {
+                HashSet::new()
+            };
+
+        let filtered_packages: Vec<PackageInfo> =
+            if let Ok(installed_guard) = self.installed_packages.lock() {
+                installed_guard
+                    .iter()
+                    .filter(|pkg| !blacklisted_packages.contains(&pkg.name))
+                    .cloned()
+                    .collect()
+            } else {
+                Vec::new()
+            };
+
+        Ok(filtered_packages)
+    }
+
+    /// Uninstall a package by name
+    pub fn uninstall_package(&self, package_name: &str) -> Result<()> {
+        let output = Command::new("brew")
+            .args(["uninstall", package_name])
+            .output()?;
+
+        if !output.status.success() {
+            let error_msg = String::from_utf8_lossy(&output.stderr);
+            return Err(anyhow::anyhow!(
+                "Failed to uninstall {}: {}",
+                package_name,
+                error_msg
+            ));
+        }
+
+        Ok(())
+    }
+
+    /// Update a package by name
+    pub fn update_package(&self, package_name: &str) -> Result<()> {
+        let output = Command::new("brew")
+            .args(["upgrade", package_name])
+            .output()?;
+
+        if !output.status.success() {
+            let error_msg = String::from_utf8_lossy(&output.stderr);
+            return Err(anyhow::anyhow!(
+                "Failed to update {}: {}",
+                package_name,
+                error_msg
+            ));
+        }
+
+        Ok(())
+    }
+
+    /// Refresh package details by name
+    pub fn refresh_package(&self, package_name: &str) -> Result<Option<PackageInfo>> {
+        // Get fresh information for a specific package
+        let output = Command::new("brew")
+            .args(["info", "--json=v2", package_name])
+            .output()?;
+
+        if !output.status.success() {
+            let error_msg = String::from_utf8_lossy(&output.stderr);
+            return Err(anyhow::anyhow!(
+                "Failed to get info for {}: {}",
+                package_name,
+                error_msg
+            ));
+        }
+
+        let json_str = String::from_utf8_lossy(&output.stdout);
+        let brew_response: BrewInfoResponse = serde_json::from_str(&json_str)?;
+
+        // Process formulae
+        for formula in brew_response.formulae {
+            if formula.name == package_name {
+                // Check if this formulae was installed directly
+                let is_directly_installed = formula.installed.iter().any(|install_info| {
+                    install_info.installed_on_request || !install_info.installed_as_dependency
+                });
+
+                if !is_directly_installed {
+                    return Ok(None); // Not a direct installation
+                }
+
+                let latest_install = formula.installed.iter().max_by(|a, b| {
+                    // First compare by timestamp
+                    let time_cmp = a.time.cmp(&b.time);
+                    if time_cmp != Ordering::Equal {
+                        return time_cmp;
+                    }
+                    // If timestamps are equal, compare versions (considering _X revisions)
+                    helpers::compare_homebrew_versions(&a.version, &b.version)
+                });
+
+                let (installed_version, installed_at) = match latest_install {
+                    Some(install) => (Some(install.version.clone()), Some(install.time)),
+                    None => (None, None),
+                };
+
+                let current_version = formula.versions.stable.unwrap_or_else(|| {
+                    formula
+                        .versions
+                        .head
+                        .unwrap_or_else(|| "unknown".to_string())
+                });
+
+                let package_info = PackageInfo::new(
+                    formula.name.clone(),
+                    formula.desc,
+                    formula.homepage,
+                    current_version,
+                    installed_version,
+                    PackageType::Formulae,
+                    Some(formula.tap),
+                    formula.outdated,
+                    formula.caveats,
+                    installed_at,
+                );
+
+                return Ok(Some(package_info));
+            }
+        }
+
+        // Process casks
+        for cask in brew_response.casks {
+            if cask.token == package_name {
+                let display_name = cask.name.first().unwrap_or(&cask.token).clone();
+                let description = cask
+                    .desc
+                    .unwrap_or_else(|| format!("{} (Cask application)", display_name));
+
+                let package_info = PackageInfo::new(
+                    cask.token,
+                    description,
+                    cask.homepage,
+                    cask.version.clone(),
+                    cask.installed.clone(),
+                    PackageType::Cask,
+                    Some(cask.tap),
+                    cask.outdated,
+                    cask.caveats,
+                    None, // Casks don't have installation timestamp in the JSON
+                );
+
+                return Ok(Some(package_info));
+            }
+        }
+
+        Ok(None) // Package not found
+    }
+
+    /// Clear package cache and mark as uninstalled
+    pub fn clear_package_cache(&self, package_name: &str) {
+        let now = Instant::now();
+
+        // Remove package from cache
+        if let Ok(mut cache) = self.cache.lock() {
+            cache.remove(package_name);
+        }
+
+        // Add to uninstalled blacklist to prevent re-adding for 30 seconds
+        if let Ok(mut uninstalled) = self.uninstalled_packages.lock() {
+            uninstalled.insert(package_name.to_string(), now);
+        }
+    }
+
+    /// Refresh all packages information from Homebrew
+    pub fn refresh_all_packages(&self) -> Result<()> {
+        // Reload all installed packages from brew
+        let new_packages = Self::load_installed_packages();
+
+        // Update the installed packages list
+        if let Ok(mut installed_guard) = self.installed_packages.lock() {
+            *installed_guard = new_packages;
+        }
+
+        // Clear the uninstalled packages blacklist since we have fresh data
+        if let Ok(mut uninstalled) = self.uninstalled_packages.lock() {
+            uninstalled.clear();
+        }
+
+        Ok(())
     }
 }
