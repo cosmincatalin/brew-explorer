@@ -4,9 +4,9 @@ A beautiful terminal UI for exploring and managing your Homebrew packages with e
 
 ## What is Brew Explorer?
 
-You know when you run `brew list` after some time and see a bunch of packages you have no idea about? Me too! It's frustrating to figure out what those packages do without copy/pasting their names into brew.sh and only then discovering what they're good for.
+You know how after some time you run `brew list` and see a bunch of packages you have no idea about? Me too! It's frustrating to figure out what those packages do without copy/pasting their names into [brew.sh](https://brew.sh) and only then discovering what they're good for.  
 
-That's why I created **Brew Explorer** - a little app that makes it easy to understand what formulae and casks you have installed on your system.  
+That's why I created **Brew Explorer** - a little app that makes it easy to understand what formulaes and casks you have installed on your system.   
 Plus, you can quickly **uninstall old useless things** and **update whatever was left behind** - all from within the same interface!
 
 ## Features
