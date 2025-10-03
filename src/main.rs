@@ -38,6 +38,10 @@ fn main() -> Result<()> {
     // Create repository and app in a separate thread to show real loading progress
     let (tx, rx) = std::sync::mpsc::channel();
     thread::spawn(move || {
+        // First, run brew update to fetch latest package information
+        let _ = helpers::brew_update();
+
+        // Then create repository and app
         let repository = HomebrewRepository::new();
         let app = App::new(repository);
         tx.send(app).unwrap();

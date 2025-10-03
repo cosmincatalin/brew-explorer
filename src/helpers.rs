@@ -111,6 +111,18 @@ fn compare_version_strings(a: &str, b: &str) -> Ordering {
 }
 
 /// Helper functions for calling brew commands
+pub fn brew_update() -> Result<()> {
+    let output = Command::new("brew")
+        .arg("update")
+        .output()?;
+
+    if !output.status.success() {
+        return Err(anyhow::anyhow!("brew update command failed"));
+    }
+
+    Ok(())
+}
+
 pub fn brew_info_all_installed() -> Result<BrewInfoResponse> {
     let output = Command::new("brew")
         .args(["info", "--json=v2", "--installed"])
