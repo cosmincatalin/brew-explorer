@@ -9,6 +9,19 @@ You know how after some time you run `brew list` and see a bunch of packages you
 That's why I created **Brew Explorer** - a little app that makes it easy to understand what formulaes and casks you have installed on your system.   
 Plus, you can quickly **uninstall old useless things** and **update whatever was left behind** - all from within the same interface!
 
+## Screenshots
+
+### Loading Screen
+![Loading Screen](.resources/loading_screen.png)
+
+### Main Screen
+
+![Main Screen](.resources/main_screen.png)
+
+### Search and Uninstall
+
+![Uninstall](.resources/uninstall.png)
+
 ## Features
 
 ✨ **Appealing TUI** - Clean, intuitive terminal interface with ASCII art  
@@ -53,16 +66,3 @@ brew install brew-explorer
 - Type to search for packages by name
 - **Enter** - Exit search and return to browsing
 - **Esc** - Cancel search
-
-## Screenshots
-
-### Loading Screen
-![Loading Screen](.resources/loading_screen.png)
-
-### Main Screen
-
-![Main Screen](.resources/main_screen.png)
-
-### Search and Uninstall
-
-![Uninstall](.resources/uninstall.png)
