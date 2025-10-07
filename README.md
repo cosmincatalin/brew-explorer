@@ -1,6 +1,6 @@
-# 🍺 Brew Explorer
-
 [![Built With Ratatui](https://ratatui.rs/built-with-ratatui/badge.svg)](https://ratatui.rs/)
+
+# 🍺 Brew Explorer
 
 A beautiful terminal UI for exploring and managing your Homebrew packages with ease.
 
