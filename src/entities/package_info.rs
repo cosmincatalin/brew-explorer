@@ -129,7 +129,7 @@ impl From<&BrewFormula> for PackageInfo {
                 .unwrap_or_else(|| "unknown".to_string()),
             installed_version,
             PackageType::Formulae,
-            Some(formula.tap.clone()),
+            formula.tap.clone(),
             formula.outdated,
             formula.caveats.clone(),
             installed_at,
@@ -156,7 +156,7 @@ impl From<&BrewCask> for PackageInfo {
             cask.version.clone(),
             installed_version,
             PackageType::Cask,
-            Some(format!("{} (cask)", cask.tap)),
+            cask.tap.clone().map(|tap| format!("{} (cask)", tap)),
             cask.outdated,
             cask.caveats.clone(),
             None, // Casks don't have installation timestamp in the JSON
