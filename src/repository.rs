@@ -228,7 +228,7 @@ impl HomebrewRepository {
                     current_version,
                     installed_version,
                     PackageType::Formulae,
-                    Some(formula.tap),
+                    formula.tap,
                     formula.outdated,
                     formula.caveats,
                     installed_at,
@@ -253,7 +253,7 @@ impl HomebrewRepository {
                     cask.version.clone(),
                     cask.installed.clone(),
                     PackageType::Cask,
-                    Some(cask.tap),
+                    cask.tap,
                     cask.outdated,
                     cask.caveats,
                     None, // Casks don't have installation timestamp in the JSON
