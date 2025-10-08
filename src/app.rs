@@ -92,12 +92,17 @@ impl App {
 
     /// Refreshes the package list from the repository
     pub fn refresh_packages(&mut self) -> Result<()> {
+        self.refresh_packages_with_selection(None)
+    }
+
+    /// Refreshes the package list from the repository, optionally preserving selection
+    fn refresh_packages_with_selection(&mut self, preserve_selection: Option<usize>) -> Result<()> {
         // Use the new repository method to refresh all packages
         self.repository.refresh_all_packages()?;
 
         // Get the refreshed packages from the repository
         self.items = self.repository.get_all_packages()?;
-        self.apply_filter();
+        self.apply_filter_with_selection(preserve_selection);
         self.reset_column_scroll(); // Reset horizontal scrolling on refresh
 
         Ok(())
@@ -440,6 +445,10 @@ impl App {
 
     /// Applies the current search filter
     fn apply_filter(&mut self) {
+        self.apply_filter_with_selection(None);
+    }
+
+    fn apply_filter_with_selection(&mut self, preserve_selection: Option<usize>) {
         if self.search_query.is_empty() {
             self.filtered_items = self.items.clone();
         } else {
@@ -455,11 +464,29 @@ impl App {
                 .collect();
         }
 
-        // Reset selection to first item after filtering
-        if !self.filtered_items.is_empty() {
-            self.list_state.select(Some(0));
+        // Apply selection based on preservation request
+        if let Some(target_index) = preserve_selection {
+            // Preserve selection at the given index
+            let max_index = if self.is_searching {
+                self.filtered_items.len()
+            } else {
+                self.items.len()
+            };
+            
+            if max_index > 0 {
+                // Ensure index is within bounds
+                let clamped_index = target_index.min(max_index - 1);
+                self.list_state.select(Some(clamped_index));
+            } else {
+                self.list_state.select(None);
+            }
         } else {
-            self.list_state.select(None);
+            // Default behavior: Reset selection to first item after filtering
+            if !self.filtered_items.is_empty() {
+                self.list_state.select(Some(0));
+            } else {
+                self.list_state.select(None);
+            }
         }
         self.reset_scroll();
     }
@@ -608,6 +635,9 @@ impl App {
     fn finish_mock_uninstall(&mut self) {
         let package_name = self.update_package_name.clone();
 
+        // Save current selection before making changes
+        let current_selection = self.list_state.selected();
+
         self.is_updating = false;
         self.is_uninstalling = false;
         self.real_update_called = false;
@@ -627,24 +657,23 @@ impl App {
                 self.filtered_items.retain(|p| p.name != name);
             }
 
-            // Refresh the entire package list to ensure consistency
-            if let Err(e) = self.refresh_packages() {
-                self.add_status_message(format!("⚠️  Failed to refresh package list: {}", e));
-            }
-
-            // Adjust selection if needed
-            let max_index = if self.is_searching {
-                self.filtered_items.len()
+            // Calculate new selection position: move to the item above the deleted one
+            // If the deleted item was at index 0, stay at 0
+            // Otherwise, move to index - 1
+            let new_selection = if let Some(selected) = current_selection {
+                if selected > 0 {
+                    Some(selected - 1)
+                } else {
+                    Some(0)
+                }
             } else {
-                self.items.len()
+                None
             };
 
-            if max_index == 0 {
-                self.list_state.select(None);
-            } else if let Some(selected) = self.list_state.selected()
-                && selected >= max_index
-            {
-                self.list_state.select(Some(max_index - 1));
+            // Refresh the entire package list to ensure consistency
+            // and apply the new selection
+            if let Err(e) = self.refresh_packages_with_selection(new_selection) {
+                self.add_status_message(format!("⚠️  Failed to refresh package list: {}", e));
             }
 
             self.add_status_message(format!("✅ Successfully uninstalled {}", name));
@@ -654,6 +683,9 @@ impl App {
     /// Finishes the mock update and resets state
     fn finish_mock_update(&mut self) {
         let package_name = self.update_package_name.clone();
+
+        // Save current selection before refreshing
+        let current_selection = self.list_state.selected();
 
         self.is_updating = false;
         self.is_uninstalling = false;
@@ -673,8 +705,9 @@ impl App {
                 self.add_status_message(format!("⚠️  Failed to refresh {}: {}", name, e));
             }
 
-            // Also refresh the entire package list to ensure consistency
-            if let Err(e) = self.refresh_packages() {
+            // Also refresh the entire package list to ensure consistency,
+            // preserving the cursor position on the updated package
+            if let Err(e) = self.refresh_packages_with_selection(current_selection) {
                 self.add_status_message(format!("⚠️  Failed to refresh package list: {}", e));
             }
         }
