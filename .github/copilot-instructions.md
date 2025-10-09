@@ -7,7 +7,6 @@ This is a Rust terminal user interface (TUI) application called "brew-explorer" 
 - **Language**: Rust (2024 edition)
 - **TUI Framework**: ratatui - Modern terminal UI library
 - **Cross-platform Terminal**: crossterm - Terminal manipulation library
-- **Homebrew Integration**: homebrew crate - Interface with Homebrew package manager
 
 ## Architecture Guidelines
 
@@ -76,14 +75,6 @@ When implementing features, consider:
 - Write comprehensive documentation for public interfaces
 - Include unit tests for core functionality
 - Use `cargo fmt` for consistent formatting
-
-## Dependencies to Consider Adding
-When extending functionality, consider these crates:
-- `tokio` - For async operations
-- `serde` + `serde_json` - For configuration and data serialization
-- `clap` - For command-line argument parsing
-- `dirs` - For cross-platform directory handling
-- `log` + `env_logger` - For debugging and logging
 
 ## Testing Strategy
 - Unit tests for business logic (brew operations, filtering, etc.)
