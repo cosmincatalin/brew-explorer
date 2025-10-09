@@ -409,22 +409,34 @@ impl App {
         self.apply_filter();
     }
 
-    /// Ends search mode and goes to first item
+    /// Ends search mode and maintains selection of the currently selected item
     pub fn end_search(&mut self) {
+        // Get the currently selected package from filtered results before ending search
+        let selected_package_name = self.get_selected_package().map(|pkg| pkg.name.clone());
+
         self.is_searching = false;
         self.search_query.clear();
 
-        // Always go to the first item (index 0)
-        if !self.items.is_empty() {
+        // Find and select the same package in the full items list
+        if let Some(package_name) = selected_package_name {
+            // Find the index of this package in the full items list
+            if let Some(index) = self.items.iter().position(|pkg| pkg.name == package_name) {
+                self.list_state.select(Some(index));
+            } else if !self.items.is_empty() {
+                // Fallback to first item if package not found (shouldn't happen)
+                self.list_state.select(Some(0));
+            } else {
+                self.list_state.select(None);
+            }
+        } else if !self.items.is_empty() {
+            // No selection in search mode, select first item
             self.list_state.select(Some(0));
-            // Reset column scroll to show the first item
-            self.column_scroll_offset = 0;
-            self.reset_scroll();
         } else {
             self.list_state.select(None);
-            self.column_scroll_offset = 0;
-            self.reset_scroll();
         }
+
+        self.column_scroll_offset = 0;
+        self.reset_scroll();
     }
 
     /// Adds a character to the search query
