@@ -113,23 +113,3 @@ jobs:
                         
                         Released for the following architecture:
                         * 🍏aarch64-apple-darwin (macOS Silicon)
-                        
-                        **Download Options:**
-                        * Raw binary: `brew-explorer-aarch64-apple-darwin`
-                        * Packaged: `brew-explorer-*-aarch64-apple-darwin.tar.gz` (includes SHA256 hash for verification)
-                        
-                        Features:
-                        * 📋 List all installed Homebrew packages (formulae and casks)
-                        * 🔄 Update packages directly from the interface
-                        * 🗑️ Uninstall packages with confirmation
-                        * 🔍 Search and filter packages
-                        * 📊 View package details, versions, and caveats
-                        * ⚡ Navigate with keyboard shortcuts
-                        
-                        **Installation:**
-                        1. Download the tar.gz file
-                        2. Extract: `tar -xzf brew-explorer-*-aarch64-apple-darwin.tar.gz`
-                        3. Make executable: `chmod +x brew-explorer`
-                        4. Run: `./brew-explorer`
-                        
-                        The SHA256 hash is displayed in the workflow logs for package verification.
