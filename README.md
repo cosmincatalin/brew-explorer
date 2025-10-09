@@ -65,6 +65,6 @@ brew install brew-explorer
 
 ### Search Mode
 
-- Type to search for packages by name
-- **Enter** - Exit search and return to browsing
-- **Esc** - Cancel search
+- Type any character to search for packages by name
+- **Enter** or **Esc** - Exit search and return to browsing
+- Navigation keys (↑/↓/←/→) still work while searching

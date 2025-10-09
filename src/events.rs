@@ -80,6 +80,7 @@ fn handle_normal_mode_keys(app: &mut App, key: KeyEvent) -> Result<()> {
 fn handle_search_mode_keys(app: &mut App, key: KeyEvent) -> Result<()> {
     match key.code {
         KeyCode::Esc => app.end_search(),
+        KeyCode::Enter => app.end_search(),
         KeyCode::Backspace => app.remove_search_char(),
         KeyCode::Down => app.next(),
         KeyCode::Up => app.previous(),
@@ -89,9 +90,6 @@ fn handle_search_mode_keys(app: &mut App, key: KeyEvent) -> Result<()> {
         KeyCode::PageUp => app.page_up(),
         KeyCode::Home => app.first(),
         KeyCode::End => app.go_to_last(),
-        KeyCode::Char('u') => app.update_selected_package()?,
-        KeyCode::Char('x') => app.uninstall_selected_package()?,
-        KeyCode::Char('q') => app.quit(),
         KeyCode::Char(c) if c.is_ascii() && !c.is_control() => app.add_search_char(c),
         _ => {}
     }
