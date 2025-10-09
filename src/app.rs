@@ -472,7 +472,7 @@ impl App {
             } else {
                 self.items.len()
             };
-            
+
             if max_index > 0 {
                 // Ensure index is within bounds
                 let clamped_index = target_index.min(max_index - 1);

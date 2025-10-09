@@ -16,7 +16,7 @@ pub struct HomebrewRepository {
 
 impl HomebrewRepository {
     pub fn new() -> Self {
-        let installed_packages =  Self::load_installed_packages();
+        let installed_packages = Self::load_installed_packages();
         let cache = Arc::new(Mutex::new(HashMap::new()));
 
         Self {

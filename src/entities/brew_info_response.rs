@@ -72,7 +72,7 @@ mod tests {
 
         let result: Result<BrewInfoResponse, _> = serde_json::from_str(json);
         assert!(result.is_ok());
-        
+
         let response = result.unwrap();
         assert_eq!(response.formulae.len(), 1);
         assert_eq!(response.formulae[0].name, "test-formula");
@@ -100,7 +100,7 @@ mod tests {
 
         let result: Result<BrewInfoResponse, _> = serde_json::from_str(json);
         assert!(result.is_ok());
-        
+
         let response = result.unwrap();
         assert_eq!(response.formulae.len(), 1);
         assert_eq!(response.formulae[0].name, "test-formula");
@@ -126,7 +126,7 @@ mod tests {
 
         let result: Result<BrewInfoResponse, _> = serde_json::from_str(json);
         assert!(result.is_ok());
-        
+
         let response = result.unwrap();
         assert_eq!(response.casks.len(), 1);
         assert_eq!(response.casks[0].token, "test-cask");
