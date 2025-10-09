@@ -51,8 +51,8 @@ brew install brew-explorer
 
 ### Navigation
 
-- **↑/↓** or **k/j** - Move up/down in the package list
-- **←/→** or **h/l** - Move left/right between columns
+- **↑/↓** - Move up/down in the package list
+- **←/→** - Move left/right between columns
 - **PgUp/PgDn** - Jump by pages
 - **Home/End** - Jump to first/last package
 
