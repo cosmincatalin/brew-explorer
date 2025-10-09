@@ -422,20 +422,23 @@ impl App {
             // Find the index of this package in the full items list
             if let Some(index) = self.items.iter().position(|pkg| pkg.name == package_name) {
                 self.list_state.select(Some(index));
+                // Ensure the selected item is visible in the view
+                self.ensure_selection_visible();
             } else if !self.items.is_empty() {
                 // Fallback to first item if package not found (shouldn't happen)
                 self.list_state.select(Some(0));
+                self.ensure_selection_visible();
             } else {
                 self.list_state.select(None);
             }
         } else if !self.items.is_empty() {
             // No selection in search mode, select first item
             self.list_state.select(Some(0));
+            self.ensure_selection_visible();
         } else {
             self.list_state.select(None);
         }
 
-        self.column_scroll_offset = 0;
         self.reset_scroll();
     }
 
