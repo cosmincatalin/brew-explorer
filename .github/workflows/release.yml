@@ -24,6 +24,9 @@ jobs:
                     -   architecture: aarch64-apple-darwin
                         os: macos-latest
                         icon: "🍏"
+                    -   architecture: x86_64-apple-darwin
+                        os: macos-latest-large
+                        icon: "🍏"
 
         steps:
             -   name: Checkout
@@ -113,3 +116,4 @@ jobs:
                         
                         Released for the following architecture:
                         * 🍏aarch64-apple-darwin (macOS Silicon)
+                        * 🍏x86_64-apple-darwin (macOS Intel)
