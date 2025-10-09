@@ -46,6 +46,7 @@ pub struct App {
     pub current_columns: usize,
     pub rows_per_column: usize,
     pub column_scroll_offset: usize, // Track which column is the leftmost visible
+    pub pending_visibility_check: bool, // Flag to ensure selection is visible after layout update
     // Mock update state
     pub is_updating: bool,
     pub update_package_name: Option<String>,
@@ -77,6 +78,7 @@ impl App {
             current_columns: 1,
             rows_per_column: 0,
             column_scroll_offset: 0,
+            pending_visibility_check: false,
             is_updating: false,
             update_package_name: None,
             update_start_time: None,
@@ -273,6 +275,12 @@ impl App {
     pub fn update_layout(&mut self, visible_columns: usize, rows_per_column: usize) {
         self.current_columns = visible_columns;
         self.rows_per_column = rows_per_column;
+
+        // If we have a pending visibility check, perform it now that layout is updated
+        if self.pending_visibility_check {
+            self.pending_visibility_check = false;
+            self.ensure_selection_visible();
+        }
     }
 
     /// Moves left to the previous column (only makes sense in multi-column layout)
@@ -422,19 +430,19 @@ impl App {
             // Find the index of this package in the full items list
             if let Some(index) = self.items.iter().position(|pkg| pkg.name == package_name) {
                 self.list_state.select(Some(index));
-                // Ensure the selected item is visible in the view
-                self.ensure_selection_visible();
+                // Mark that we need to ensure visibility on next layout update
+                self.pending_visibility_check = true;
             } else if !self.items.is_empty() {
                 // Fallback to first item if package not found (shouldn't happen)
                 self.list_state.select(Some(0));
-                self.ensure_selection_visible();
+                self.pending_visibility_check = true;
             } else {
                 self.list_state.select(None);
             }
         } else if !self.items.is_empty() {
             // No selection in search mode, select first item
             self.list_state.select(Some(0));
-            self.ensure_selection_visible();
+            self.pending_visibility_check = true;
         } else {
             self.list_state.select(None);
         }
