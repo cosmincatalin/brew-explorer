@@ -109,9 +109,12 @@ impl PackageInfo {
 impl From<&BrewFormula> for PackageInfo {
     fn from(formula: &BrewFormula) -> Self {
         let (installed_version, installed_at) = if !formula.installed.is_empty() {
-            let latest_install = formula.installed.iter().max_by_key(|install| install.time);
+            let latest_install = formula
+                .installed
+                .iter()
+                .max_by_key(|install| install.time.unwrap_or(0));
             match latest_install {
-                Some(install) => (Some(install.version.clone()), Some(install.time)),
+                Some(install) => (Some(install.version.clone()), install.time),
                 None => (None, None),
             }
         } else {
