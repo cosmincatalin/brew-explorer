@@ -200,8 +200,8 @@ impl HomebrewRepository {
                 }
 
                 let latest_install = formula.installed.iter().max_by(|a, b| {
-                    // First compare by timestamp
-                    let time_cmp = a.time.cmp(&b.time);
+                    // First compare by timestamp (treating None as 0)
+                    let time_cmp = a.time.unwrap_or(0).cmp(&b.time.unwrap_or(0));
                     if time_cmp != Ordering::Equal {
                         return time_cmp;
                     }
@@ -210,7 +210,7 @@ impl HomebrewRepository {
                 });
 
                 let (installed_version, installed_at) = match latest_install {
-                    Some(install) => (Some(install.version.clone()), Some(install.time)),
+                    Some(install) => (Some(install.version.clone()), install.time),
                     None => (None, None),
                 };
 

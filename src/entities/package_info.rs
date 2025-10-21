@@ -57,6 +57,12 @@ impl PackageInfo {
 
     /// Checks if the package has an update available
     pub fn has_update_available(&self) -> bool {
+        // Trust Homebrew's outdated flag first - it knows about revisions and other subtleties
+        if self.outdated {
+            return true;
+        }
+
+        // Fallback to version comparison for cases where outdated flag might not be set
         match &self.installed_version {
             Some(installed) => {
                 // Use version comparison that understands revisions
@@ -74,7 +80,12 @@ impl PackageInfo {
         match &self.installed_version {
             Some(version) => {
                 if self.has_update_available() {
-                    format!("{} (update available)", version)
+                    // Check if this is a revision update (versions appear the same but outdated flag is set)
+                    if self.outdated && version == &self.current_version {
+                        format!("{} (revision update available)", version)
+                    } else {
+                        format!("{} (update available)", version)
+                    }
                 } else {
                     format!("{} (up to date)", version)
                 }
@@ -109,9 +120,12 @@ impl PackageInfo {
 impl From<&BrewFormula> for PackageInfo {
     fn from(formula: &BrewFormula) -> Self {
         let (installed_version, installed_at) = if !formula.installed.is_empty() {
-            let latest_install = formula.installed.iter().max_by_key(|install| install.time);
+            let latest_install = formula
+                .installed
+                .iter()
+                .max_by_key(|install| install.time.unwrap_or(0));
             match latest_install {
-                Some(install) => (Some(install.version.clone()), Some(install.time)),
+                Some(install) => (Some(install.version.clone()), install.time),
                 None => (None, None),
             }
         } else {
@@ -188,7 +202,7 @@ mod tests {
             caveats: None,
             installed_at: Some(1696118400), // Example timestamp
         };
-        assert_eq!(package1.has_update_available(), false);
+        assert!(!package1.has_update_available());
 
         // Case 2: Installed version 3.2.4 is older than stable 3.2.5 - update available
         let package2 = PackageInfo {
@@ -203,7 +217,7 @@ mod tests {
             caveats: None,
             installed_at: Some(1696118400), // Example timestamp
         };
-        assert_eq!(package2.has_update_available(), true);
+        assert!(package2.has_update_available());
 
         // Case 3: Installed version 76.1 is older than stable 76.1_2 - update available
         let package3 = PackageInfo {
@@ -218,7 +232,7 @@ mod tests {
             caveats: None,
             installed_at: Some(1696118400), // Example timestamp
         };
-        assert_eq!(package3.has_update_available(), true);
+        assert!(package3.has_update_available());
     }
 
     #[test]
