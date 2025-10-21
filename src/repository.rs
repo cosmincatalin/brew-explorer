@@ -224,7 +224,9 @@ impl HomebrewRepository {
                 let package_info = PackageInfo::new(
                     formula.name.clone(),
                     formula.desc,
-                    formula.homepage,
+                    formula
+                        .homepage
+                        .unwrap_or_else(|| "No homepage available".to_string()),
                     current_version,
                     installed_version,
                     PackageType::Formulae,
@@ -249,7 +251,8 @@ impl HomebrewRepository {
                 let package_info = PackageInfo::new(
                     cask.token,
                     description,
-                    cask.homepage,
+                    cask.homepage
+                        .unwrap_or_else(|| "No homepage available".to_string()),
                     cask.version.clone(),
                     cask.installed.clone(),
                     PackageType::Cask,

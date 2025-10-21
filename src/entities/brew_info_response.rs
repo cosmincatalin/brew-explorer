@@ -10,7 +10,7 @@ nest! {
                 pub name: String,
                 pub tap: Option<String>,
                 pub desc: String,
-                pub homepage: String,
+                pub homepage: Option<String>,
                 pub versions:
                     #[derive(Debug, Deserialize)]
                     pub struct BrewVersions {
@@ -37,7 +37,7 @@ nest! {
                 pub tap: Option<String>,
                 pub name: Vec<String>,
                 pub desc: Option<String>,
-                pub homepage: String,
+                pub homepage: Option<String>,
                 pub version: String,
                 pub installed: Option<String>,
                 pub outdated: bool,
@@ -165,5 +165,59 @@ mod tests {
         assert_eq!(response.formulae[0].name, "test-formula");
         assert_eq!(response.formulae[0].installed.len(), 1);
         assert_eq!(response.formulae[0].installed[0].time, None);
+    }
+
+    #[test]
+    fn test_deserialize_formula_with_null_homepage() {
+        let json = r#"{
+            "formulae": [{
+                "name": "test-formula",
+                "tap": "homebrew/core",
+                "desc": "Test description",
+                "homepage": null,
+                "versions": {
+                    "stable": "1.0.0",
+                    "head": null
+                },
+                "installed": [],
+                "outdated": false,
+                "caveats": null
+            }],
+            "casks": []
+        }"#;
+
+        let result: Result<BrewInfoResponse, _> = serde_json::from_str(json);
+        assert!(result.is_ok());
+
+        let response = result.unwrap();
+        assert_eq!(response.formulae.len(), 1);
+        assert_eq!(response.formulae[0].name, "test-formula");
+        assert_eq!(response.formulae[0].homepage, None);
+    }
+
+    #[test]
+    fn test_deserialize_cask_with_null_homepage() {
+        let json = r#"{
+            "formulae": [],
+            "casks": [{
+                "token": "test-cask",
+                "tap": "homebrew/cask",
+                "name": ["Test Cask"],
+                "desc": "Test description",
+                "homepage": null,
+                "version": "1.0.0",
+                "installed": null,
+                "outdated": false,
+                "caveats": null
+            }]
+        }"#;
+
+        let result: Result<BrewInfoResponse, _> = serde_json::from_str(json);
+        assert!(result.is_ok());
+
+        let response = result.unwrap();
+        assert_eq!(response.casks.len(), 1);
+        assert_eq!(response.casks[0].token, "test-cask");
+        assert_eq!(response.casks[0].homepage, None);
     }
 }

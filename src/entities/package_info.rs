@@ -124,7 +124,10 @@ impl From<&BrewFormula> for PackageInfo {
         PackageInfo::new(
             formula.name.clone(),
             formula.desc.clone(),
-            formula.homepage.clone(),
+            formula
+                .homepage
+                .clone()
+                .unwrap_or_else(|| "No homepage available".to_string()),
             formula
                 .versions
                 .stable
@@ -155,7 +158,9 @@ impl From<&BrewCask> for PackageInfo {
         PackageInfo::new(
             cask.token.clone(),
             description,
-            cask.homepage.clone(),
+            cask.homepage
+                .clone()
+                .unwrap_or_else(|| "No homepage available".to_string()),
             cask.version.clone(),
             installed_version,
             PackageType::Cask,
@@ -217,5 +222,51 @@ mod tests {
             installed_at: Some(1696118400), // Example timestamp
         };
         assert_eq!(package3.has_update_available(), true);
+    }
+
+    #[test]
+    fn test_from_brew_formula_with_null_homepage() {
+        use crate::entities::brew_info_response::{BrewFormula, BrewVersions};
+
+        let formula = BrewFormula {
+            name: "test-formula".to_string(),
+            tap: Some("homebrew/core".to_string()),
+            desc: "Test description".to_string(),
+            homepage: None,
+            versions: BrewVersions {
+                stable: Some("1.0.0".to_string()),
+                head: None,
+            },
+            installed: vec![],
+            outdated: false,
+            caveats: None,
+        };
+
+        let package_info = PackageInfo::from(&formula);
+        assert_eq!(package_info.name, "test-formula");
+        assert_eq!(package_info.homepage, "No homepage available");
+        assert_eq!(package_info.description, "Test description");
+    }
+
+    #[test]
+    fn test_from_brew_cask_with_null_homepage() {
+        use crate::entities::brew_info_response::BrewCask;
+
+        let cask = BrewCask {
+            token: "test-cask".to_string(),
+            tap: Some("homebrew/cask".to_string()),
+            name: vec!["Test Cask".to_string()],
+            desc: Some("Test description".to_string()),
+            homepage: None,
+            version: "1.0.0".to_string(),
+            installed: None,
+            outdated: false,
+            caveats: None,
+        };
+
+        let package_info = PackageInfo::from(&cask);
+        assert_eq!(package_info.name, "test-cask");
+        assert_eq!(package_info.homepage, "No homepage available");
+        assert_eq!(package_info.description, "Test description");
     }
 }
