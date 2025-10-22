@@ -51,8 +51,8 @@ brew install brew-explorer
 
 ### Navigation
 
-- **↑/↓** - Move up/down in the package list
-- **←/→** - Move left/right between columns
+- **↑/↓** or **k/j** - Move up/down in the package list (Vim-style)
+- **←/→** or **h/l** - Move left/right between columns (Vim-style)
 - **PgUp/PgDn** - Jump by pages
 - **Home/End** - Jump to first/last package
 
@@ -67,4 +67,4 @@ brew install brew-explorer
 
 - Type any character to search for packages by name
 - **Enter** or **Esc** - Exit search and return to browsing
-- Navigation keys (↑/↓/←/→) still work while searching
+- Navigation keys (↑/↓/←/→ or k/j/h/l) still work while searching
