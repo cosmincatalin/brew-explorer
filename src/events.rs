@@ -1,4 +1,5 @@
 use crate::app::App;
+use crate::helpers;
 use anyhow::Result;
 use crossterm::event::{KeyCode, KeyEvent};
 
@@ -16,6 +17,12 @@ pub fn handle_key_event(app: &mut App, key: KeyEvent) -> Result<()> {
 
 /// Handles key events when a modal is open
 fn handle_modal_keys(app: &mut App, key: KeyEvent) -> Result<()> {
+    // Handle 'g' key globally - opens GitHub issues
+    if let KeyCode::Char('g') = key.code {
+        let _ = helpers::open_github_issues();
+        return Ok(());
+    }
+
     match app.modal_state {
         crate::app::ModalState::UpdateProgress => {
             // During update progress, no keys are allowed - user must wait for completion
@@ -58,6 +65,9 @@ fn handle_modal_keys(app: &mut App, key: KeyEvent) -> Result<()> {
 /// Handles key events in normal navigation mode
 fn handle_normal_mode_keys(app: &mut App, key: KeyEvent) -> Result<()> {
     match key.code {
+        KeyCode::Char('g') => {
+            let _ = helpers::open_github_issues();
+        }
         KeyCode::Char('q') => app.quit(),
         KeyCode::Down | KeyCode::Char('j') => app.next(),
         KeyCode::Up | KeyCode::Char('k') => app.previous(),
@@ -79,6 +89,10 @@ fn handle_normal_mode_keys(app: &mut App, key: KeyEvent) -> Result<()> {
 /// Handles key events in search mode
 fn handle_search_mode_keys(app: &mut App, key: KeyEvent) -> Result<()> {
     match key.code {
+        KeyCode::Char('g') => {
+            // Open GitHub issues page (global hotkey)
+            let _ = helpers::open_github_issues();
+        }
         KeyCode::Esc => app.end_search(),
         KeyCode::Enter => app.end_search(),
         KeyCode::Backspace => app.remove_search_char(),
