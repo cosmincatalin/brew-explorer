@@ -473,7 +473,7 @@ fn render_help_text(f: &mut Frame, area: ratatui::layout::Rect) {
                 .fg(Color::Cyan)
                 .add_modifier(Modifier::BOLD),
         ),
-        Span::raw(": GitHub | Quit: q"),
+        Span::raw(": Submit Issue | Quit: q"),
     ];
     let help_paragraph =
         Paragraph::new(Line::from(help_text)).style(Style::default().fg(Color::Gray));
@@ -510,7 +510,7 @@ fn render_status_bar(f: &mut Frame, app: &mut App, area: ratatui::layout::Rect) 
                     .fg(Color::Cyan)
                     .add_modifier(Modifier::BOLD),
             ),
-            Span::raw(": GitHub | Quit: q"),
+            Span::raw(": Submit Issue | Quit: q"),
         ]))
     };
 
