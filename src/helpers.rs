@@ -136,6 +136,13 @@ pub fn brew_info_all_installed() -> Result<BrewInfoResponse> {
     Ok(response)
 }
 
+/// Opens the GitHub issues page in the default browser
+pub fn open_github_issues() -> Result<()> {
+    webbrowser::open("https://github.com/cosmincatalin/brew-explorer/issues")
+        .map_err(|e| anyhow::anyhow!("Failed to open browser: {}", e))?;
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

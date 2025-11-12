@@ -465,8 +465,18 @@ fn create_action_hints(package: &crate::entities::package_info::PackageInfo) -> 
 
 /// Renders help text at the bottom of the details panel
 fn render_help_text(f: &mut Frame, area: ratatui::layout::Rect) {
-    let help_text = "Navigate: ↑/↓ ←/→ | Search: / | Actions: u/x | Quit: q";
-    let help_paragraph = Paragraph::new(help_text).style(Style::default().fg(Color::Gray));
+    let help_text = vec![
+        Span::raw("Navigate: ↑/↓ ←/→ | Search: / | Actions: u/x | "),
+        Span::styled(
+            "g",
+            Style::default()
+                .fg(Color::Cyan)
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::raw(": GitHub | Quit: q"),
+    ];
+    let help_paragraph =
+        Paragraph::new(Line::from(help_text)).style(Style::default().fg(Color::Gray));
 
     let help_area = area.inner(Margin {
         horizontal: 1,
@@ -486,12 +496,22 @@ fn render_help_text(f: &mut Frame, area: ratatui::layout::Rect) {
 /// Renders the status bar at the bottom of the screen
 fn render_status_bar(f: &mut Frame, app: &mut App, area: ratatui::layout::Rect) {
     let status_text = if let Some(update_status) = app.get_update_status() {
-        // Prioritize update status when an update is in progress
-        update_status
+        // Prioritise update status when an update is in progress
+        Text::from(update_status)
     } else if let Some(message) = app.get_current_status() {
-        message
+        Text::from(message)
     } else {
-        "Navigate: ↑/↓ ←/→ PgUp/PgDn Home/End | Search: / | Actions: u/x | Quit: q".to_string()
+        // Default help text with highlighted 'g' key
+        Text::from(Line::from(vec![
+            Span::raw("Navigate: ↑/↓ ←/→ PgUp/PgDn Home/End | Search: / | Actions: u/x | "),
+            Span::styled(
+                "g",
+                Style::default()
+                    .fg(Color::Cyan)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::raw(": GitHub | Quit: q"),
+        ]))
     };
 
     let status_paragraph = Paragraph::new(status_text)
