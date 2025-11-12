@@ -89,6 +89,10 @@ fn handle_normal_mode_keys(app: &mut App, key: KeyEvent) -> Result<()> {
 /// Handles key events in search mode
 fn handle_search_mode_keys(app: &mut App, key: KeyEvent) -> Result<()> {
     match key.code {
+        KeyCode::Char('g') => {
+            // Open GitHub issues page (global hotkey)
+            let _ = helpers::open_github_issues();
+        }
         KeyCode::Esc => app.end_search(),
         KeyCode::Enter => app.end_search(),
         KeyCode::Backspace => app.remove_search_char(),
