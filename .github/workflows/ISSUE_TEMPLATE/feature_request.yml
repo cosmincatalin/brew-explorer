@@ -1,0 +1,29 @@
+name: "✨ Feature Request"
+description: "💡 Suggest an idea for this repository"
+labels:
+  - "🚀 Feature Request"
+  - "❓ Unverified"
+title: "[Feature]: "
+body:
+  - type: markdown
+    attributes:
+      value: |
+        👋 Thanks for taking the time to suggest a new feature!
+
+  - type: textarea
+    id: feature
+    attributes:
+      label: "❓ What is the feature request you would like to suggest?"
+      description: "🔍 Please describe what problem you're trying to solve."
+      placeholder: "Example: I'd like the application to [...]"
+    validations:
+      required: true
+
+  - type: textarea
+    id: additional_context
+    attributes:
+      label: "📝 Additional context"
+      description: "➕ Add any other context, screenshots, or examples about the feature request here."
+      placeholder: "Example: Screenshots, logs, or any other context that may help us understand the issue better."
+    validations:
+      required: false
