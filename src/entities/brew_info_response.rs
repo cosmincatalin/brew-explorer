@@ -22,7 +22,6 @@ nest! {
                     pub struct BrewInstalled {
                         pub version: String,
                         pub time: Option<u64>,
-                        pub installed_as_dependency: bool,
                         pub installed_on_request: bool,
                     }
                 >,

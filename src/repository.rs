@@ -48,9 +48,10 @@ impl HomebrewRepository {
 
         // Process formulae - only include packages installed directly (not as dependencies)
         for formula in brew_response.formulae {
-            let is_directly_installed = formula.installed.iter().any(|install_info| {
-                install_info.installed_on_request || !install_info.installed_as_dependency
-            });
+            let is_directly_installed = formula
+                .installed
+                .iter()
+                .any(|install_info| install_info.installed_on_request);
             if !is_directly_installed {
                 continue;
             }
@@ -191,9 +192,10 @@ impl HomebrewRepository {
         for formula in brew_response.formulae {
             if formula.name == package_name {
                 // Check if this formulae was installed directly
-                let is_directly_installed = formula.installed.iter().any(|install_info| {
-                    install_info.installed_on_request || !install_info.installed_as_dependency
-                });
+                let is_directly_installed = formula
+                    .installed
+                    .iter()
+                    .any(|install_info| install_info.installed_on_request);
 
                 if !is_directly_installed {
                     return Ok(None); // Not a direct installation
