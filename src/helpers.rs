@@ -1,6 +1,8 @@
 use crate::entities::brew_info_response::BrewInfoResponse;
+use crate::entities::mas_app::MasApp;
 use anyhow::Result;
 use std::cmp::Ordering;
+use std::collections::HashSet;
 use std::process::Command;
 
 /// Formats a duration in seconds into a human-readable "time ago" string
@@ -134,6 +136,121 @@ pub fn brew_info_all_installed() -> Result<BrewInfoResponse> {
     let output_str = String::from_utf8(output.stdout)?;
     let response: BrewInfoResponse = serde_json::from_str(&output_str)?;
     Ok(response)
+}
+
+/// Returns true if the `mas` CLI is available on the system
+pub fn mas_is_installed() -> bool {
+    Command::new("which")
+        .arg("mas")
+        .output()
+        .map(|o| o.status.success())
+        .unwrap_or(false)
+}
+
+/// Returns all apps installed via the Mac App Store as reported by `mas list`,
+/// enriched with App Store URLs and outdated status.
+pub fn mas_list_installed() -> Result<Vec<MasApp>> {
+    let output = Command::new("mas").arg("list").output()?;
+
+    if !output.status.success() {
+        return Err(anyhow::anyhow!("mas list command failed"));
+    }
+
+    let text = String::from_utf8(output.stdout)?;
+    let mut apps: Vec<MasApp> = text
+        .lines()
+        .filter_map(parse_mas_line)
+        .collect();
+
+    // Mark outdated apps
+    let outdated_ids = mas_outdated_ids().unwrap_or_default();
+    for app in &mut apps {
+        app.outdated = outdated_ids.contains(&app.id);
+    }
+
+    Ok(apps)
+}
+
+/// Returns the set of app IDs that have pending updates in the App Store.
+fn mas_outdated_ids() -> Result<HashSet<u32>> {
+    let output = Command::new("mas").arg("outdated").output()?;
+
+    if !output.status.success() {
+        return Err(anyhow::anyhow!("mas outdated command failed"));
+    }
+
+    let text = String::from_utf8(output.stdout)?;
+    let ids = text
+        .lines()
+        .filter_map(|line| {
+            let line = line.trim();
+            let (id_str, _) = line.split_once(char::is_whitespace)?;
+            id_str.parse::<u32>().ok()
+        })
+        .collect();
+
+    Ok(ids)
+}
+
+/// Uninstalls a Mac App Store app by numeric ID using `mas uninstall`.
+pub fn mas_uninstall(id: u32) -> Result<()> {
+    let output = Command::new("mas")
+        .args(["uninstall", &id.to_string()])
+        .output()?;
+
+    if !output.status.success() {
+        let err = String::from_utf8_lossy(&output.stderr);
+        return Err(anyhow::anyhow!("mas uninstall failed: {}", err));
+    }
+
+    Ok(())
+}
+
+/// Upgrades a Mac App Store app by numeric ID using `mas upgrade`.
+pub fn mas_upgrade(id: u32) -> Result<()> {
+    let output = Command::new("mas")
+        .args(["upgrade", &id.to_string()])
+        .output()?;
+
+    if !output.status.success() {
+        let err = String::from_utf8_lossy(&output.stderr);
+        return Err(anyhow::anyhow!("mas upgrade failed: {}", err));
+    }
+
+    Ok(())
+}
+
+/// Parses a single line from `mas list` output into a MasApp
+/// Format: `1234567890  App Name  (1.2.3)`
+fn parse_mas_line(line: &str) -> Option<MasApp> {
+    let line = line.trim();
+    if line.is_empty() {
+        return None;
+    }
+
+    let (id_str, rest) = line.split_once(char::is_whitespace)?;
+    let id: u32 = id_str.trim().parse().ok()?;
+    let rest = rest.trim();
+
+    // Version is the last parenthesised token: `(1.2.3)`
+    let version_start = rest.rfind('(')?;
+    let version_end = rest.rfind(')')?;
+    if version_end <= version_start {
+        return None;
+    }
+    let version = rest[version_start + 1..version_end].trim().to_string();
+    let name = rest[..version_start].trim().to_string();
+
+    if name.is_empty() {
+        return None;
+    }
+
+    Some(MasApp {
+        id,
+        name,
+        version,
+        outdated: false,
+    })
 }
 
 /// Opens the GitHub issues page in the default browser
