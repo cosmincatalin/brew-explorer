@@ -1,4 +1,5 @@
 use crate::app::{App, ModalState, UpdateStage};
+use crate::entities::package_info::PackageType;
 use ratatui::{
     Frame,
     layout::{Alignment, Constraint, Direction, Layout, Margin},
@@ -291,11 +292,12 @@ fn render_package_list(f: &mut Frame, app: &mut App, area: ratatui::layout::Rect
 
 /// Gets the appropriate style for a package based on its status
 fn get_package_style(package: &crate::entities::package_info::PackageInfo) -> Style {
+    if package.package_type == PackageType::MasApp {
+        return Style::default().fg(Color::Green);
+    }
     if package.outdated || package.has_update_available() {
-        // Use a more visible reddish color for packages with updates available
-        Style::default().fg(Color::Rgb(220, 80, 80)) // Soft reddish color
+        Style::default().fg(Color::Rgb(220, 80, 80))
     } else {
-        // All packages are installed (since they come from brew --installed)
         Style::default().fg(Color::Green)
     }
 }
@@ -351,11 +353,11 @@ fn render_package_details(f: &mut Frame, app: &App, area: ratatui::layout::Rect)
 /// Creates the detailed text for a package
 fn create_package_details_text(package: &crate::entities::package_info::PackageInfo) -> Text<'_> {
     let installed_status = package.installation_status();
-    let status_colour = if package.outdated || package.has_update_available() {
-        // Use the same reddish color for packages with updates available
-        Color::Rgb(220, 80, 80) // Soft reddish color
+    let status_colour = if package.package_type != PackageType::MasApp
+        && (package.outdated || package.has_update_available())
+    {
+        Color::Rgb(220, 80, 80)
     } else {
-        // All packages are installed (since they come from brew --installed)
         Color::Green
     };
 
@@ -365,28 +367,46 @@ fn create_package_details_text(package: &crate::entities::package_info::PackageI
             Span::raw(&package.name),
         ]),
         Line::from(""),
-        Line::from(vec![
-            Span::styled(
-                "Description: ",
-                Style::default().add_modifier(Modifier::BOLD),
-            ),
-            Span::raw(&package.description),
-        ]),
-        Line::from(""),
-        Line::from(vec![
-            Span::styled("Tap: ", Style::default().add_modifier(Modifier::BOLD)),
-            Span::raw(package.tap.as_deref().unwrap_or("unknown")),
-        ]),
-        Line::from(""),
-        Line::from(vec![
-            Span::styled("Caveats: ", Style::default().add_modifier(Modifier::BOLD)),
-            Span::raw(package.caveats.as_deref().unwrap_or("none")),
-        ]),
-        Line::from(""),
-        Line::from(vec![
-            Span::styled("Homepage: ", Style::default().add_modifier(Modifier::BOLD)),
-            Span::styled(&package.homepage, Style::default().fg(Color::Blue)),
-        ]),
+    ];
+
+    if package.package_type != PackageType::MasApp {
+        lines.extend([
+            Line::from(vec![
+                Span::styled(
+                    "Description: ",
+                    Style::default().add_modifier(Modifier::BOLD),
+                ),
+                Span::raw(&package.description),
+            ]),
+            Line::from(""),
+            Line::from(vec![
+                Span::styled("Tap: ", Style::default().add_modifier(Modifier::BOLD)),
+                Span::raw(package.tap.as_deref().unwrap_or("unknown")),
+            ]),
+            Line::from(""),
+            Line::from(vec![
+                Span::styled("Caveats: ", Style::default().add_modifier(Modifier::BOLD)),
+                Span::raw(package.caveats.as_deref().unwrap_or("none")),
+            ]),
+            Line::from(""),
+            Line::from(vec![
+                Span::styled("Homepage: ", Style::default().add_modifier(Modifier::BOLD)),
+                Span::styled(&package.homepage, Style::default().fg(Color::Blue)),
+            ]),
+        ]);
+    } else {
+        lines.extend([
+            Line::from(vec![
+                Span::styled(
+                    "App Store: ",
+                    Style::default().add_modifier(Modifier::BOLD),
+                ),
+                Span::styled(&package.homepage, Style::default().fg(Color::Blue)),
+            ]),
+        ]);
+    }
+
+    lines.extend([
         Line::from(""),
         Line::from(vec![
             Span::styled(
@@ -404,7 +424,21 @@ fn create_package_details_text(package: &crate::entities::package_info::PackageI
             Span::raw(&package.current_version),
         ]),
         Line::from(""),
-    ];
+    ]);
+
+    // Add App Store ID for MAS apps
+    if package.package_type == PackageType::MasApp {
+        if let Some(mas_id) = package.mas_id {
+            lines.push(Line::from(vec![
+                Span::styled(
+                    "App Store ID: ",
+                    Style::default().add_modifier(Modifier::BOLD),
+                ),
+                Span::styled(mas_id.to_string(), Style::default().fg(Color::Cyan)),
+            ]));
+            lines.push(Line::from(""));
+        }
+    }
 
     // Add installation time if available
     if let Some(time_ago) = package.installed_ago() {
@@ -417,7 +451,6 @@ fn create_package_details_text(package: &crate::entities::package_info::PackageI
 
     lines.push(Line::from(""));
 
-    // Add the action hints as separate lines
     lines.extend(create_action_hints(package));
 
     Text::from(lines)
@@ -435,8 +468,6 @@ fn create_action_hints(package: &crate::entities::package_info::PackageInfo) -> 
         Line::from(""),
     ];
 
-    // All packages are installed (since they come from brew --installed)
-    // Add uninstall action
     lines.push(Line::from(vec![
         Span::raw("    ◦ "),
         Span::styled(
@@ -446,7 +477,6 @@ fn create_action_hints(package: &crate::entities::package_info::PackageInfo) -> 
         Span::styled(" (press 'x' to remove)", Style::default().fg(Color::Gray)),
     ]));
 
-    // Only add update action if update is available
     if package.has_update_available() {
         lines.push(Line::from(vec![
             Span::raw("    ◦ "),
