@@ -25,9 +25,7 @@ impl HomebrewRepository {
                         installed_packages.push(PackageInfo::from(app));
                     }
                 }
-                Err(_) => {
-                    // mas is present but failed — will surface via status message later
-                }
+                Err(_err) => {}
             }
         }
 
