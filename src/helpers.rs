@@ -140,8 +140,8 @@ pub fn brew_info_all_installed() -> Result<BrewInfoResponse> {
 
 /// Returns true if the `mas` CLI is available on the system
 pub fn mas_is_installed() -> bool {
-    Command::new("which")
-        .arg("mas")
+    Command::new("mas")
+        .arg("--version")
         .output()
         .map(|o| o.status.success())
         .unwrap_or(false)
