@@ -60,6 +60,29 @@ pub fn render_loading_screen(f: &mut Frame, loading_dots: usize, elapsed: std::t
 
     f.render_widget(ascii_block, vertical_layout[1]);
 
+    // Badge to the right of "BREW" — BREW is 36 cols wide, centred
+    let badge_text = "Now with Mac App Store Support 🍏";
+    let badge_width: u16 = 35;
+    let badge_height: u16 = 1;
+    let brew_right_edge = area.width / 2 + 18;
+    let badge_x = brew_right_edge + 2;
+    let badge_y = vertical_layout[1].y + 2; // vertically centred on BREW block
+    if badge_x + badge_width <= area.width {
+        let badge_area = ratatui::layout::Rect {
+            x: badge_x,
+            y: badge_y,
+            width: badge_width,
+            height: badge_height,
+        };
+        let badge = Paragraph::new(Span::styled(
+            badge_text,
+            Style::default()
+                .fg(Color::Green)
+                .add_modifier(Modifier::BOLD),
+        ));
+        f.render_widget(badge, badge_area);
+    }
+
     // Loading message with animated dots
     let dots = match loading_dots {
         0 => "   ",
