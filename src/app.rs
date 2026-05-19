@@ -590,25 +590,45 @@ impl App {
             .map(|start| start.elapsed())
             .unwrap_or_default();
 
-        let package_name = self.update_package_name.as_ref().unwrap();
+        let package_name = self.update_package_name.as_ref().unwrap().clone();
 
         match self.update_stage {
-            UpdateStage::Starting if elapsed > Duration::from_millis(800) => {
+            UpdateStage::Starting if elapsed > Duration::from_millis(500) => {
+                // For MAS apps, fire the real update command immediately in the Starting stage
+                // so we have as much time as possible for the App Store download to complete.
+                if !self.real_update_called && !self.is_uninstalling {
+                    if let Some(mas_id) = self.pending_mas_id {
+                        match self.repository.update_mas_app(mas_id) {
+                            Ok(cmd_output) => {
+                                let info = if cmd_output.is_empty() {
+                                    "App Store update triggered — no output returned".to_string()
+                                } else {
+                                    format!("mas update: {}", cmd_output)
+                                };
+                                self.add_status_message(format!("🍏 {} — downloading…", info));
+                            }
+                            Err(e) => {
+                                self.add_status_message(format!(
+                                    "❌ Failed to trigger update for {}: {}",
+                                    package_name, e
+                                ));
+                                self.finish_mock_update();
+                                return;
+                            }
+                        }
+                        self.real_update_called = true;
+                    }
+                }
                 self.update_stage = UpdateStage::Downloading;
-                self.add_status_message(format!("Downloading {} updates...", package_name));
             }
             UpdateStage::Downloading if elapsed > Duration::from_millis(2500) => {
                 self.update_stage = UpdateStage::Installing;
                 self.add_status_message(format!("Installing {} updates...", package_name));
             }
             UpdateStage::Installing if elapsed > Duration::from_millis(4000) => {
-                // Call real update during Installing stage if not called yet
+                // Call real update during Installing stage for non-MAS packages
                 if !self.real_update_called && !self.is_uninstalling {
-                    let result = if let Some(mas_id) = self.pending_mas_id {
-                        self.repository.update_mas_app(mas_id)
-                    } else {
-                        self.repository.update_package(package_name)
-                    };
+                    let result = self.repository.update_package(&package_name);
                     if let Err(e) = result {
                         self.add_status_message(format!(
                             "❌ Failed to update {}: {}",
@@ -625,7 +645,14 @@ impl App {
             }
             UpdateStage::Completing if elapsed > Duration::from_millis(5000) => {
                 self.update_stage = UpdateStage::Finished;
-                self.add_status_message(format!("✅ {} updated successfully!", package_name));
+                if self.pending_mas_id.is_some() {
+                    self.add_status_message(format!(
+                        "✅ {} update initiated — the App Store will complete the installation.",
+                        package_name
+                    ));
+                } else {
+                    self.add_status_message(format!("✅ {} updated successfully!", package_name));
+                }
             }
             UpdateStage::Finished if elapsed > Duration::from_millis(6000) => {
                 // Reset update state
@@ -727,6 +754,9 @@ impl App {
         // Save current selection before refreshing
         let current_selection = self.list_state.selected();
 
+        // Capture before clearing
+        let was_mas_update = self.pending_mas_id.is_some();
+
         self.is_updating = false;
         self.is_uninstalling = false;
         self.real_update_called = false;
@@ -738,16 +768,26 @@ impl App {
 
         // Refresh package list after update to ensure all metadata is current
         if let Some(name) = package_name {
-            // Add a small delay to ensure brew has updated its internal state
-            std::thread::sleep(Duration::from_millis(500));
+            // For MAS apps, add a slightly longer pause to give the App Store daemon
+            // a chance to update the installed metadata before we query `mas list`.
+            let delay = if was_mas_update {
+                Duration::from_millis(2000)
+            } else {
+                Duration::from_millis(500)
+            };
+            std::thread::sleep(delay);
 
-            // Try to refresh the specific package first
-            if let Err(e) = self.refresh_single_package(name.clone()) {
-                self.add_status_message(format!("⚠️  Failed to refresh {}: {}", name, e));
+            // `refresh_single_package` uses `brew info` which has no knowledge of MAS apps.
+            // Calling it for a MAS app would return Ok(None) and wrongly remove the app
+            // from the list. Skip it entirely for MAS updates.
+            if !was_mas_update {
+                if let Err(e) = self.refresh_single_package(name.clone()) {
+                    self.add_status_message(format!("⚠️  Failed to refresh {}: {}", name, e));
+                }
             }
 
-            // Also refresh the entire package list to ensure consistency,
-            // preserving the cursor position on the updated package
+            // Refresh the entire package list to ensure consistency,
+            // preserving the cursor position on the updated package.
             if let Err(e) = self.refresh_packages_with_selection(current_selection) {
                 self.add_status_message(format!("⚠️  Failed to refresh package list: {}", e));
             }
@@ -767,16 +807,32 @@ impl App {
             UpdateStage::Starting => Some(format!("🔄 Preparing to update {}...", package_name)),
             UpdateStage::Downloading => {
                 let dots = ".".repeat(((elapsed.as_millis() / 300) % 4) as usize);
-                Some(format!("⬇️  Downloading {} updates{}", package_name, dots))
+                if self.pending_mas_id.is_some() {
+                    Some(format!(
+                        "🍏 App Store downloading {}{} — this may take a while",
+                        package_name, dots
+                    ))
+                } else {
+                    Some(format!("⬇️  Downloading {} updates{}", package_name, dots))
+                }
             }
             UpdateStage::Installing => {
                 let dots = ".".repeat(((elapsed.as_millis() / 200) % 4) as usize);
                 Some(format!("🔧 Installing {} updates{}", package_name, dots))
             }
             UpdateStage::Completing => {
-                Some(format!("✨ Finalizing {} installation...", package_name))
+                Some(format!("✨ Finalising {} installation...", package_name))
             }
-            UpdateStage::Finished => Some(format!("✅ {} updated successfully!", package_name)),
+            UpdateStage::Finished => {
+                if self.pending_mas_id.is_some() {
+                    Some(format!(
+                        "✅ App Store update initiated for {}",
+                        package_name
+                    ))
+                } else {
+                    Some(format!("✅ {} updated successfully!", package_name))
+                }
+            }
             // Uninstall status messages
             UpdateStage::UninstallStarting => {
                 Some(format!("🗑️  Preparing to uninstall {}...", package_name))
