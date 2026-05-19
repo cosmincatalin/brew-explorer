@@ -249,6 +249,7 @@ fn parse_mas_line(line: &str) -> Option<MasApp> {
         id,
         name,
         version,
+        available_version: None,
         outdated: false,
     })
 }
