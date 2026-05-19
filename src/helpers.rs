@@ -2,7 +2,7 @@ use crate::entities::brew_info_response::BrewInfoResponse;
 use crate::entities::mas_app::MasApp;
 use anyhow::Result;
 use std::cmp::Ordering;
-use std::collections::HashSet;
+use std::collections::HashMap;
 use std::process::Command;
 
 /// Formats a duration in seconds into a human-readable "time ago" string
@@ -157,22 +157,38 @@ pub fn mas_list_installed() -> Result<Vec<MasApp>> {
     }
 
     let text = String::from_utf8(output.stdout)?;
-    let mut apps: Vec<MasApp> = text
-        .lines()
-        .filter_map(parse_mas_line)
-        .collect();
+    let mut apps: Vec<MasApp> = text.lines().filter_map(parse_mas_line).collect();
 
-    // Mark outdated apps
-    let outdated_ids = mas_outdated_ids().unwrap_or_default();
+    // `mas outdated` can be empty on some systems even when `mas info` shows a
+    // newer store version. Use `mas info` as the source of truth for each app,
+    // and keep `mas outdated` as an additional signal.
+    let outdated_map = mas_outdated_apps().unwrap_or_default();
     for app in &mut apps {
-        app.outdated = outdated_ids.contains(&app.id);
+        let version_from_outdated = outdated_map.get(&app.id).cloned().flatten();
+        let version_from_info = mas_info_version(app.id).ok().flatten();
+
+        app.available_version = version_from_outdated.or(version_from_info);
+
+        let outdated_by_id = outdated_map.contains_key(&app.id);
+        let outdated_by_version = app
+            .available_version
+            .as_deref()
+            .map(|available| compare_homebrew_versions(&app.version, available) == Ordering::Less)
+            .unwrap_or(false);
+
+        app.outdated = outdated_by_id || outdated_by_version;
     }
 
     Ok(apps)
 }
 
-/// Returns the set of app IDs that have pending updates in the App Store.
-fn mas_outdated_ids() -> Result<HashSet<u32>> {
+/// Returns a map of outdated app IDs to their available App Store version
+/// (if the version could be parsed from `mas outdated` output).
+///
+/// `mas outdated` typically outputs lines in one of two formats:
+///   `<id>  <name>  (<installed> -> <available>)`
+///   `<id>  <name>`
+fn mas_outdated_apps() -> Result<HashMap<u32, Option<String>>> {
     let output = Command::new("mas").arg("outdated").output()?;
 
     if !output.status.success() {
@@ -180,16 +196,73 @@ fn mas_outdated_ids() -> Result<HashSet<u32>> {
     }
 
     let text = String::from_utf8(output.stdout)?;
-    let ids = text
+    let map = text
         .lines()
         .filter_map(|line| {
             let line = line.trim();
-            let (id_str, _) = line.split_once(char::is_whitespace)?;
-            id_str.parse::<u32>().ok()
+            let (id_str, rest) = line.split_once(char::is_whitespace)?;
+            let id = id_str.trim().parse::<u32>().ok()?;
+
+            // Try to extract the available version from " -> X.Y.Z)" at the end
+            let available = parse_outdated_available_version(rest);
+            Some((id, available))
         })
         .collect();
 
-    Ok(ids)
+    Ok(map)
+}
+
+/// Parses the available version out of the trailing portion of a `mas outdated` line.
+/// Handles formats like `AppName (1.0 -> 2.0)` or `AppName  1.0  2.0`.
+fn parse_outdated_available_version(rest: &str) -> Option<String> {
+    // Format: "App Name (installed -> available)"
+    if let Some(arrow_pos) = rest.find("->") {
+        let after_arrow = rest[arrow_pos + 2..].trim();
+        // Strip a trailing ')'
+        let version_str = after_arrow.trim_end_matches(')').trim();
+        if !version_str.is_empty() && version_str.chars().any(|c| c.is_ascii_digit()) {
+            return Some(version_str.to_string());
+        }
+    }
+
+    // Format: last whitespace-separated token that looks like a version number
+    let last = rest.split_whitespace().last()?;
+    if last.chars().any(|c| c.is_ascii_digit()) && last.contains('.') {
+        return Some(last.to_string());
+    }
+
+    None
+}
+
+/// Returns the App Store version for a given app ID from `mas info`.
+fn mas_info_version(id: u32) -> Result<Option<String>> {
+    let output = Command::new("mas")
+        .args(["info", &id.to_string()])
+        .output()?;
+
+    if !output.status.success() {
+        return Err(anyhow::anyhow!("mas info command failed for {}", id));
+    }
+
+    let text = String::from_utf8(output.stdout)?;
+    Ok(parse_mas_info_version(&text))
+}
+
+/// Parses `mas info` output and extracts the reported App Store version.
+fn parse_mas_info_version(text: &str) -> Option<String> {
+    for line in text.lines() {
+        let trimmed = line.trim();
+        if !trimmed.starts_with("Version") {
+            continue;
+        }
+
+        let candidate = trimmed.split_whitespace().last()?;
+        if candidate.chars().any(|c| c.is_ascii_digit()) {
+            return Some(candidate.to_string());
+        }
+    }
+
+    None
 }
 
 /// Uninstalls a Mac App Store app by numeric ID using `mas uninstall`.
@@ -319,5 +392,64 @@ mod tests {
             Ordering::Greater
         );
         assert_eq!(compare_version_strings("3.2.4", "3.10.1"), Ordering::Less);
+    }
+
+    #[test]
+    fn test_parse_mas_info_version() {
+        let info_output = "\
+App WhatsApp Messenger\n\
+Version 26.19.75\n\
+Price Free\n\
+";
+
+        assert_eq!(
+            parse_mas_info_version(info_output),
+            Some("26.19.75".to_string())
+        );
+    }
+
+    #[test]
+    fn test_parse_mas_info_version_with_colon() {
+        let info_output = "App: WhatsApp\nVersion: 26.19.75\n";
+        assert_eq!(
+            parse_mas_info_version(info_output),
+            Some("26.19.75".to_string())
+        );
+    }
+
+    #[test]
+    fn test_parse_mas_info_version_with_decorative_glyphs() {
+        let info_output = "App ▁▁▁▁▁▁▁▁ WhatsApp Messenger\nVersion ▁▁▁▁ 26.19.75\n";
+        assert_eq!(
+            parse_mas_info_version(info_output),
+            Some("26.19.75".to_string())
+        );
+    }
+
+    #[test]
+    fn test_parse_outdated_available_version_arrow_format() {
+        // Format: "AppName (installed -> available)"
+        let rest = "WhatsApp (26.18.72 -> 26.19.75)";
+        assert_eq!(
+            parse_outdated_available_version(rest),
+            Some("26.19.75".to_string())
+        );
+    }
+
+    #[test]
+    fn test_parse_outdated_available_version_no_version() {
+        // Format: "AppName" only — no version info
+        let rest = "WhatsApp";
+        assert_eq!(parse_outdated_available_version(rest), None);
+    }
+
+    #[test]
+    fn test_parse_outdated_available_version_two_tokens() {
+        // Format: "AppName  1.0  2.0" — last token is available version
+        let rest = "WhatsApp  26.18.72  26.19.75";
+        assert_eq!(
+            parse_outdated_available_version(rest),
+            Some("26.19.75".to_string())
+        );
     }
 }
