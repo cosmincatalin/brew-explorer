@@ -518,7 +518,9 @@ impl App {
 
     /// Uninstalls the currently selected package
     pub fn uninstall_selected_package(&mut self) -> Result<()> {
-        let pending = self.get_selected_package().map(|p| (p.name.clone(), p.mas_id));
+        let pending = self
+            .get_selected_package()
+            .map(|p| (p.name.clone(), p.mas_id));
         if let Some((name, mas_id)) = pending {
             if !self.is_updating {
                 self.pending_uninstall_package = Some(name);
@@ -669,7 +671,7 @@ impl App {
                     let result = if let Some(mas_id) = self.pending_mas_id {
                         self.repository.uninstall_mas_app(mas_id)
                     } else {
-                        self.repository.uninstall_package(package_name)
+                        self.repository.uninstall_package(&package_name)
                     };
                     if let Err(e) = result {
                         self.add_status_message(format!(
