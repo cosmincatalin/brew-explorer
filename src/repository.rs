@@ -16,7 +16,19 @@ pub struct HomebrewRepository {
 
 impl HomebrewRepository {
     pub fn new() -> Self {
-        let installed_packages = Self::load_installed_packages();
+        let mut installed_packages = Self::load_installed_packages();
+
+        if helpers::mas_is_installed() {
+            match helpers::mas_list_installed() {
+                Ok(mas_apps) => {
+                    for app in &mas_apps {
+                        installed_packages.push(PackageInfo::from(app));
+                    }
+                }
+                Err(_err) => {}
+            }
+        }
+
         let cache = Arc::new(Mutex::new(HashMap::new()));
 
         Self {
@@ -79,6 +91,7 @@ impl HomebrewRepository {
             false,
             None,
             None,
+            None,
         )
     }
 
@@ -96,6 +109,7 @@ impl HomebrewRepository {
             PackageType::Unknown,
             None,
             false,
+            None,
             None,
             None,
         )
@@ -133,7 +147,7 @@ impl HomebrewRepository {
         Ok(filtered_packages)
     }
 
-    /// Uninstall a package by name
+    /// Uninstall a Homebrew package by name
     pub fn uninstall_package(&self, package_name: &str) -> Result<()> {
         let output = Command::new("brew")
             .args(["uninstall", package_name])
@@ -151,7 +165,17 @@ impl HomebrewRepository {
         Ok(())
     }
 
-    /// Update a package by name
+    /// Uninstall a Mac App Store app by numeric ID
+    pub fn uninstall_mas_app(&self, mas_id: u32) -> Result<()> {
+        helpers::mas_uninstall(mas_id)
+    }
+
+    /// Upgrade a Mac App Store app by numeric ID
+    pub fn update_mas_app(&self, mas_id: u32) -> Result<()> {
+        helpers::mas_upgrade(mas_id)
+    }
+
+    /// Update a Homebrew package by name
     pub fn update_package(&self, package_name: &str) -> Result<()> {
         let output = Command::new("brew")
             .args(["upgrade", package_name])
@@ -236,6 +260,7 @@ impl HomebrewRepository {
                     formula.outdated,
                     formula.caveats,
                     installed_at,
+                    None,
                 );
 
                 return Ok(Some(package_info));
@@ -262,6 +287,7 @@ impl HomebrewRepository {
                     cask.outdated,
                     cask.caveats,
                     None, // Casks don't have installation timestamp in the JSON
+                    None,
                 );
 
                 return Ok(Some(package_info));
@@ -286,17 +312,22 @@ impl HomebrewRepository {
         }
     }
 
-    /// Refresh all packages information from Homebrew
+    /// Refresh all packages information from Homebrew and the Mac App Store
     pub fn refresh_all_packages(&self) -> Result<()> {
-        // Reload all installed packages from brew
-        let new_packages = Self::load_installed_packages();
+        let mut new_packages = Self::load_installed_packages();
 
-        // Update the installed packages list
+        if helpers::mas_is_installed() {
+            if let Ok(mas_apps) = helpers::mas_list_installed() {
+                for app in &mas_apps {
+                    new_packages.push(PackageInfo::from(app));
+                }
+            }
+        }
+
         if let Ok(mut installed_guard) = self.installed_packages.lock() {
             *installed_guard = new_packages;
         }
 
-        // Clear the uninstalled packages blacklist since we have fresh data
         if let Ok(mut uninstalled) = self.uninstalled_packages.lock() {
             uninstalled.clear();
         }
