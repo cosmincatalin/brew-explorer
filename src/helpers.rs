@@ -3,6 +3,7 @@ use crate::entities::mas_app::MasApp;
 use anyhow::Result;
 use std::cmp::Ordering;
 use std::collections::HashMap;
+use std::collections::HashSet;
 use std::process::Command;
 
 /// Formats a duration in seconds into a human-readable "time ago" string
@@ -333,7 +334,6 @@ fn parse_mas_line(line: &str) -> Option<MasApp> {
         outdated: false,
     })
 }
-
 /// Opens the GitHub issues page in the default browser
 pub fn open_github_issues() -> Result<()> {
     webbrowser::open("https://github.com/cosmincatalin/brew-explorer/issues")

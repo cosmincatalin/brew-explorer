@@ -214,7 +214,6 @@ impl From<&MasApp> for PackageInfo {
         )
     }
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;
