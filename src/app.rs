@@ -630,18 +630,15 @@ impl App {
             UpdateStage::Installing if elapsed > Duration::from_millis(4000) => {
                 // Call real update during Installing stage for non-MAS packages
                 if !self.real_update_called && !self.is_uninstalling {
-                    let result = if let Some(mas_id) = self.pending_mas_id {
-                        self.repository.update_mas_app(mas_id)
-                    } else {
-                        self.repository.update_package(&package_name)
-                    };
-                    if let Err(e) = result {
-                        self.add_status_message(format!(
-                            "❌ Failed to update {}: {}",
-                            package_name, e
-                        ));
-                        self.finish_mock_update();
-                        return;
+                    if self.pending_mas_id.is_none() {
+                        if let Err(e) = self.repository.update_package(&package_name) {
+                            self.add_status_message(format!(
+                                "❌ Failed to update {}: {}",
+                                package_name, e
+                            ));
+                            self.finish_mock_update();
+                            return;
+                        }
                     }
                     self.real_update_called = true;
                 }

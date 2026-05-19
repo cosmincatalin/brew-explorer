@@ -3,7 +3,6 @@ use crate::entities::mas_app::MasApp;
 use anyhow::Result;
 use std::cmp::Ordering;
 use std::collections::HashMap;
-use std::collections::HashSet;
 use std::process::Command;
 
 /// Formats a duration in seconds into a human-readable "time ago" string
