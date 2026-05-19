@@ -55,6 +55,7 @@ pub struct App {
     pub is_uninstalling: bool,    // Track if this is an uninstall operation
     pub real_update_called: bool, // Track if real update has been called
     pub pending_uninstall_package: Option<String>, // Package pending uninstall confirmation
+    pub pending_mas_id: Option<u32>, // MAS ID for the current operation if applicable
     // Modal state
     pub modal_state: ModalState,
 }
@@ -86,6 +87,7 @@ impl App {
             is_uninstalling: false,
             real_update_called: false,
             pending_uninstall_package: None,
+            pending_mas_id: None,
             modal_state: ModalState::None,
         };
         app.list_state.select(Some(0));
@@ -516,10 +518,11 @@ impl App {
 
     /// Uninstalls the currently selected package
     pub fn uninstall_selected_package(&mut self) -> Result<()> {
-        if let Some(package) = self.get_selected_package() {
+        let pending = self.get_selected_package().map(|p| (p.name.clone(), p.mas_id));
+        if let Some((name, mas_id)) = pending {
             if !self.is_updating {
-                // Show confirmation modal instead of immediately uninstalling
-                self.pending_uninstall_package = Some(package.name.clone());
+                self.pending_uninstall_package = Some(name);
+                self.pending_mas_id = mas_id;
                 self.modal_state = ModalState::UninstallConfirmation;
             } else {
                 self.add_status_message("Another operation is currently in progress".to_string());
@@ -528,14 +531,17 @@ impl App {
         Ok(())
     }
 
-    /// Updates the currently selected package (mock implementation for UX testing)
+    /// Updates the currently selected package
     pub fn update_selected_package(&mut self) -> Result<()> {
-        if let Some(package) = self.get_selected_package() {
-            if package.has_update_available() && !self.is_updating {
-                // Start mock update process
-                self.start_mock_update(package.name.clone());
-            } else if !package.has_update_available() {
-                self.add_status_message(format!("{} is already up to date", package.name));
+        let selected = self
+            .get_selected_package()
+            .map(|p| (p.name.clone(), p.mas_id, p.has_update_available()));
+        if let Some((name, mas_id, has_update)) = selected {
+            if has_update && !self.is_updating {
+                self.pending_mas_id = mas_id;
+                self.start_mock_update(name.clone());
+            } else if !has_update {
+                self.add_status_message(format!("{} is already up to date", name));
             } else if self.is_updating {
                 self.add_status_message("Another package is currently being updated".to_string());
             }
@@ -598,7 +604,12 @@ impl App {
             UpdateStage::Installing if elapsed > Duration::from_millis(4000) => {
                 // Call real update during Installing stage if not called yet
                 if !self.real_update_called && !self.is_uninstalling {
-                    if let Err(e) = self.repository.update_package(package_name) {
+                    let result = if let Some(mas_id) = self.pending_mas_id {
+                        self.repository.update_mas_app(mas_id)
+                    } else {
+                        self.repository.update_package(package_name)
+                    };
+                    if let Err(e) = result {
                         self.add_status_message(format!(
                             "❌ Failed to update {}: {}",
                             package_name, e
@@ -628,7 +639,12 @@ impl App {
             UpdateStage::UninstallRemoving if elapsed > Duration::from_millis(2000) => {
                 // Call real uninstall during UninstallRemoving stage if not called yet
                 if !self.real_update_called && self.is_uninstalling {
-                    if let Err(e) = self.repository.uninstall_package(package_name) {
+                    let result = if let Some(mas_id) = self.pending_mas_id {
+                        self.repository.uninstall_mas_app(mas_id)
+                    } else {
+                        self.repository.uninstall_package(package_name)
+                    };
+                    if let Err(e) = result {
                         self.add_status_message(format!(
                             "❌ Failed to uninstall {}: {}",
                             package_name, e
@@ -668,6 +684,7 @@ impl App {
         self.update_start_time = None;
         self.update_stage = UpdateStage::Idle;
         self.modal_state = ModalState::None;
+        self.pending_mas_id = None;
 
         // Remove package from list after uninstall
         if let Some(name) = package_name {
@@ -717,6 +734,7 @@ impl App {
         self.update_start_time = None;
         self.update_stage = UpdateStage::Idle;
         self.modal_state = ModalState::None;
+        self.pending_mas_id = None;
 
         // Refresh package list after update to ensure all metadata is current
         if let Some(name) = package_name {
@@ -822,6 +840,7 @@ impl App {
     /// Cancels the uninstall operation
     pub fn cancel_uninstall(&mut self) {
         self.pending_uninstall_package = None;
+        self.pending_mas_id = None;
         self.modal_state = ModalState::None;
         self.add_status_message("Uninstall cancelled".to_string());
     }
