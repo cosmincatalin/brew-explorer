@@ -171,7 +171,7 @@ impl HomebrewRepository {
     }
 
     /// Upgrade a Mac App Store app by numeric ID
-    pub fn update_mas_app(&self, mas_id: u32) -> Result<()> {
+    pub fn update_mas_app(&self, mas_id: u32) -> Result<String> {
         helpers::mas_upgrade(mas_id)
     }
 

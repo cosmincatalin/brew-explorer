@@ -279,18 +279,25 @@ pub fn mas_uninstall(id: u32) -> Result<()> {
     Ok(())
 }
 
-/// Upgrades a Mac App Store app by numeric ID using `mas upgrade`.
-pub fn mas_upgrade(id: u32) -> Result<()> {
+/// Updates a Mac App Store app by numeric ID using `mas update`.
+///
+/// `mas update` triggers an App Store download which may complete asynchronously.
+/// Returns `Ok(output_text)` so callers can surface what the command actually reported.
+pub fn mas_upgrade(id: u32) -> Result<String> {
     let output = Command::new("mas")
-        .args(["upgrade", &id.to_string()])
+        .args(["update", &id.to_string()])
         .output()?;
 
+    let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+
     if !output.status.success() {
-        let err = String::from_utf8_lossy(&output.stderr);
-        return Err(anyhow::anyhow!("mas upgrade failed: {}", err));
+        let detail = if !stderr.is_empty() { stderr } else { stdout };
+        return Err(anyhow::anyhow!("mas update failed: {}", detail));
     }
 
-    Ok(())
+    // Return whichever stream has content so the UI can show it.
+    Ok(if !stdout.is_empty() { stdout } else { stderr })
 }
 
 /// Parses a single line from `mas list` output into a MasApp
