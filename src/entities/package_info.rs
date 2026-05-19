@@ -1,4 +1,5 @@
 use crate::entities::brew_info_response::{BrewCask, BrewFormula};
+use crate::entities::mas_app::MasApp;
 use crate::helpers;
 use nestify::nest;
 use std::cmp::Ordering;
@@ -17,12 +18,14 @@ nest! {
             pub enum PackageType {
                 Formulae,
                 Cask,
+                MasApp,
                 Unknown,
             },
         pub tap: Option<String>,
         pub outdated: bool,
         pub caveats: Option<String>,
         pub installed_at: Option<u64>, // Unix timestamp
+        pub mas_id: Option<u32>,
     }
 }
 
@@ -40,6 +43,7 @@ impl PackageInfo {
         outdated: bool,
         caveats: Option<String>,
         installed_at: Option<u64>,
+        mas_id: Option<u32>,
     ) -> Self {
         Self {
             name,
@@ -52,6 +56,7 @@ impl PackageInfo {
             outdated,
             caveats,
             installed_at,
+            mas_id,
         }
     }
 
@@ -112,6 +117,7 @@ impl PackageInfo {
         match self.package_type {
             PackageType::Formulae => format!("⚙️ {}", self.name),
             PackageType::Cask => format!("🍺 {}", self.name),
+            PackageType::MasApp => format!("🍏 {}", self.name),
             PackageType::Unknown => self.name.clone(),
         }
     }
@@ -150,6 +156,7 @@ impl From<&BrewFormula> for PackageInfo {
             formula.outdated,
             formula.caveats.clone(),
             installed_at,
+            None,
         )
     }
 }
@@ -179,6 +186,26 @@ impl From<&BrewCask> for PackageInfo {
             cask.outdated,
             cask.caveats.clone(),
             None, // Casks don't have installation timestamp in the JSON
+            None,
+        )
+    }
+}
+
+impl From<&MasApp> for PackageInfo {
+    fn from(app: &MasApp) -> Self {
+        let homepage = format!("https://apps.apple.com/app/id{}", app.id);
+        PackageInfo::new(
+            app.name.clone(),
+            String::new(),
+            homepage,
+            app.version.clone(),
+            Some(app.version.clone()),
+            PackageType::MasApp,
+            Some("mac-app-store".to_string()),
+            app.outdated,
+            None,
+            None,
+            Some(app.id),
         )
     }
 }
@@ -200,7 +227,8 @@ mod tests {
             tap: None,
             outdated: false,
             caveats: None,
-            installed_at: Some(1696118400), // Example timestamp
+            installed_at: Some(1696118400),
+            mas_id: None,
         };
         assert!(!package1.has_update_available());
 
@@ -215,7 +243,8 @@ mod tests {
             tap: None,
             outdated: false,
             caveats: None,
-            installed_at: Some(1696118400), // Example timestamp
+            installed_at: Some(1696118400),
+            mas_id: None,
         };
         assert!(package2.has_update_available());
 
@@ -230,7 +259,8 @@ mod tests {
             tap: None,
             outdated: false,
             caveats: None,
-            installed_at: Some(1696118400), // Example timestamp
+            installed_at: Some(1696118400),
+            mas_id: None,
         };
         assert!(package3.has_update_available());
     }
