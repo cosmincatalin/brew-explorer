@@ -194,11 +194,16 @@ impl From<&BrewCask> for PackageInfo {
 impl From<&MasApp> for PackageInfo {
     fn from(app: &MasApp) -> Self {
         let homepage = format!("https://apps.apple.com/app/id{}", app.id);
+        let current_version = app
+            .available_version
+            .clone()
+            .unwrap_or_else(|| app.version.clone());
+
         PackageInfo::new(
             app.name.clone(),
             String::new(),
             homepage,
-            app.version.clone(),
+            current_version,
             Some(app.version.clone()),
             PackageType::MasApp,
             Some("mac-app-store".to_string()),
@@ -309,5 +314,21 @@ mod tests {
         assert_eq!(package_info.name, "test-cask");
         assert_eq!(package_info.homepage, "No homepage available");
         assert_eq!(package_info.description, "Test description");
+    }
+
+    #[test]
+    fn test_from_mas_app_uses_available_version_as_current() {
+        let mas_app = MasApp {
+            id: 310633997,
+            name: "WhatsApp".to_string(),
+            version: "26.18.72".to_string(),
+            available_version: Some("26.19.75".to_string()),
+            outdated: true,
+        };
+
+        let package_info = PackageInfo::from(&mas_app);
+        assert_eq!(package_info.current_version, "26.19.75");
+        assert_eq!(package_info.installed_version.as_deref(), Some("26.18.72"));
+        assert!(package_info.has_update_available());
     }
 }
