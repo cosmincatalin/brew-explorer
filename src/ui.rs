@@ -399,15 +399,10 @@ fn create_package_details_text(package: &crate::entities::package_info::PackageI
             ]),
         ]);
     } else {
-        lines.extend([
-            Line::from(vec![
-                Span::styled(
-                    "App Store: ",
-                    Style::default().add_modifier(Modifier::BOLD),
-                ),
-                Span::styled(&package.homepage, Style::default().fg(Color::Blue)),
-            ]),
-        ]);
+        lines.extend([Line::from(vec![
+            Span::styled("App Store: ", Style::default().add_modifier(Modifier::BOLD)),
+            Span::styled(&package.homepage, Style::default().fg(Color::Blue)),
+        ])]);
     }
 
     lines.extend([
@@ -600,7 +595,7 @@ fn render_update_modal(f: &mut Frame, app: &App) {
         UpdateStage::Starting => (10, "Starting", "Preparing update process...", "Updating"),
         UpdateStage::Downloading => {
             let base_progress = 20;
-            let additional = ((elapsed.as_millis() - 800) / 17).min(40) as u16; // Up to 40% more
+            let additional = (elapsed.as_millis().saturating_sub(800) / 17).min(40) as u16; // Up to 40% more
             (
                 base_progress + additional,
                 "Downloading",
@@ -610,7 +605,7 @@ fn render_update_modal(f: &mut Frame, app: &App) {
         }
         UpdateStage::Installing => {
             let base_progress = 60;
-            let additional = ((elapsed.as_millis() - 2500) / 15).min(25) as u16; // Up to 25% more
+            let additional = (elapsed.as_millis().saturating_sub(2500) / 15).min(25) as u16; // Up to 25% more
             (
                 base_progress + additional,
                 "Installing",
@@ -634,7 +629,7 @@ fn render_update_modal(f: &mut Frame, app: &App) {
         ),
         UpdateStage::UninstallRemoving => {
             let base_progress = 30;
-            let additional = ((elapsed.as_millis() - 500) / 15).min(40) as u16; // Up to 40% more
+            let additional = (elapsed.as_millis().saturating_sub(500) / 15).min(40) as u16; // Up to 40% more
             (
                 base_progress + additional,
                 "Removing",
